@@ -1,8 +1,12 @@
--- Idle-event AntiAFK. No movement, camera control, shared globals or permanent loops.
+-- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 do
-    print("[AntiAFK] Loaded revision 1")
+    print("[AntiAFK] Loaded revision 2 (keyboard debug)")
+    local MIN_INTERVAL, MAX_INTERVAL = 30, 60
+    local PRESS_SECONDS = 0.08
+    local DEBUG = true
     local Players = game:GetService("Players")
     local UserInputService = game:GetService("UserInputService")
+    local RunService = game:GetService("RunService")
     local player = Players.LocalPlayer
     if not player then return end
     local playerGui = player:WaitForChild("PlayerGui", 10)
@@ -10,32 +14,47 @@ do
     local GUI_NAME = "ROBLOXDEV_AntiAFK"
     local previous = playerGui:FindFirstChild(GUI_NAME)
     if previous then previous:Destroy() end
-    local running, enabled, injecting = true, true, false
+    local KEYS = { Enum.KeyCode.F13, Enum.KeyCode.F14, Enum.KeyCode.F15 }
+    local running, enabled = true, true
     local connections = {}
-    local controlGui
+    local controlGui, statusLabel
     local lastActivity = os.clock()
-    local lastPulse = -math.huge
-    local virtualUser
-    local pendingRelease, pulsePosition, pulseCamera = false, nil, nil
+    local nextDue, nextUI = math.huge, 0
+    local sendKey, backend = nil, "unavailable"
+    local pressedKey, releaseAt
+    local receipt
+    local attempts, sent, confirmed = 0, 0, 0
+    local state = "Starting"
+    local function debugLog(message)
+        if DEBUG then print("[AntiAFK] " .. message) end
+    end
     local function release()
-        if not pendingRelease then return true end
-        local ok, err = pcall(function() virtualUser:Button2Up(pulsePosition, pulseCamera) end)
-        if ok then pendingRelease = false end
+        if not pressedKey then return true end
+        local key = pressedKey
+        -- Clear first: the backend can synchronously fire InputEnded.
+        pressedKey = nil
+        local ok, err = pcall(function() sendKey(false, key) end)
+        if not ok then pressedKey = key end
         return ok, err
+    end
+    local function disable(reason)
+        enabled = false
+        state = "ERROR - see Console"
+        warn("[AntiAFK] Disabled: " .. tostring(reason))
     end
     local function stop(reason)
         if not running then return end
         running = false
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
-        local released, err = release()
-        if not released then warn("[AntiAFK] Could not release virtual button: " .. tostring(err)) end
+        local ok, err = release()
+        if not ok then warn("[AntiAFK] Key release failed: " .. tostring(err)) end
         if controlGui then
             local gui = controlGui
             controlGui = nil
             gui:Destroy()
         end
-        print("[AntiAFK] Stopped: " .. tostring(reason or "stop-button"))
+        debugLog("Stopped: " .. tostring(reason or "stop-button"))
     end
     local function connect(signal, callback)
         local connection = signal:Connect(callback)
@@ -58,7 +77,7 @@ do
 
         local panel = Instance.new("Frame")
         panel.Name = "Panel"
-        panel.Size = UDim2.fromOffset(184, 78)
+        panel.Size = UDim2.fromOffset(260, 142)
         panel.Position = UDim2.fromOffset(20, 300)
         panel.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
         panel.BorderSizePixel = 0
@@ -71,7 +90,7 @@ do
         handle.Name = "DragHandle"
         handle.Size = UDim2.new(1, 0, 0, 28)
         handle.BackgroundTransparency = 1
-        handle.Text = "ANTI AFK  -  drag"
+        handle.Text = "ANTI AFK DEBUG  -  drag"
         handle.TextColor3 = Color3.fromRGB(210, 220, 235)
         handle.Font = Enum.Font.GothamBold
         handle.TextSize = 12
@@ -81,7 +100,7 @@ do
         local button = Instance.new("TextButton")
         button.Name = "StopButton"
         button.Size = UDim2.new(1, -16, 0, 40)
-        button.Position = UDim2.fromOffset(8, 30)
+        button.Position = UDim2.fromOffset(8, 94)
         button.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
         button.BorderSizePixel = 0
         button.Text = "STOP ANTI AFK"
@@ -92,6 +111,18 @@ do
         local buttonCorner = Instance.new("UICorner")
         buttonCorner.CornerRadius = UDim.new(0, 7)
         buttonCorner.Parent = button
+
+        statusLabel = Instance.new("TextLabel")
+        statusLabel.Name = "DebugStatus"
+        statusLabel.Size = UDim2.new(1, -16, 0, 60)
+        statusLabel.Position = UDim2.fromOffset(8, 28)
+        statusLabel.BackgroundTransparency = 1
+        statusLabel.TextColor3 = Color3.fromRGB(210, 220, 235)
+        statusLabel.Font = Enum.Font.Code
+        statusLabel.TextSize = 12
+        statusLabel.TextWrapped = true
+        statusLabel.Text = "Starting..."
+        statusLabel.Parent = panel
 
         local stopEvent = Instance.new("BindableEvent")
         stopEvent.Name = "StopRequested"
@@ -136,64 +167,108 @@ do
 
     local ok, err = xpcall(function()
         makeControl()
-        virtualUser = game:GetService("VirtualUser")
-        local function activity()
-            if not injecting then lastActivity = os.clock() end
-        end
-        connect(UserInputService.InputBegan, activity)
-        connect(UserInputService.InputChanged, activity)
-        connect(UserInputService.InputEnded, activity)
-        connect(UserInputService.TextBoxFocused, activity)
-        connect(UserInputService.TextBoxFocusReleased, activity)
-        connect(UserInputService.WindowFocused, activity)
-        connect(player.Idled, function()
-            if not running or not enabled or injecting then return end
-            local now = os.clock()
-            if now - lastActivity < 3 or now - lastPulse < 30 then return end
-            local checked, busy = pcall(function()
-                return UserInputService:GetFocusedTextBox() ~= nil
-                    or #UserInputService:GetKeysPressed() > 0
-                    or #UserInputService:GetMouseButtonsPressed() > 0
-                    or #UserInputService:GetTouches() > 0
+        -- Use the public test API when available; Delta may instead expose VIM.
+        local created, virtual = pcall(function() return UserInputService:CreateVirtualInput() end)
+        if created and virtual then
+            backend = "VirtualInput"
+            sendKey = function(down, key) virtual:SendKey(down, key, false) end
+        else
+            local found, manager = pcall(function()
+                local service = game:GetService("VirtualInputManager")
+                assert(type(service.SendKeyEvent) == "function", "SendKeyEvent unavailable")
+                return service
             end)
-            if not checked then
-                enabled = false
-                warn("[AntiAFK] Input check unavailable; disabled: " .. tostring(busy))
-                return
-            end
-            if busy then return end
-            local camera = workspace.CurrentCamera
-            if not camera then return end
-            local prepared, prepareErr = pcall(function()
-                pulsePosition = UserInputService:GetMouseLocation()
-                pulseCamera = camera.CFrame
-            end)
-            if not prepared then
-                enabled = false
-                warn("[AntiAFK] Input preparation unavailable; disabled: " .. tostring(prepareErr))
-                return
-            end
-            injecting = true
-            pendingRelease = true
-            -- No CaptureController, mouse movement, keyboard input or yield between
-            -- down and up. Real input events are never blocked or consumed.
-            local pressed, pressErr = pcall(function()
-                virtualUser:Button2Down(pulsePosition, pulseCamera)
-            end)
-            local released, releaseErr = release()
-            injecting = false
-            lastPulse = now
-            if not pressed or not released then
-                enabled = false
-                warn("[AntiAFK] Virtual input unavailable; disabled: " .. tostring(pressErr or releaseErr))
+            if found then
+                backend = "VirtualInputManager"
+                sendKey = function(down, key) manager:SendKeyEvent(down, key, false, game) end
             else
-                print("[AntiAFK] Idle pulse sent.")
+                disable("No keyboard injection API: " .. tostring(manager))
+            end
+        end
+        local function schedule(now)
+            local interval = MIN_INTERVAL + (MAX_INTERVAL - MIN_INTERVAL) * math.random()
+            nextDue = now + interval
+            debugLog(string.format("NEXT in %.2fs; backend=%s", interval, backend))
+        end
+        local function observe(input, down, processed)
+            local now = os.clock()
+            if receipt and now <= receipt.checkAt and input.UserInputType == Enum.UserInputType.Keyboard
+                and input.KeyCode == receipt.key then
+                if down then receipt.down = true else receipt.up = true end
+                debugLog(string.format("OBSERVED %s %s #%d processed=%s",
+                    down and "DOWN" or "UP", receipt.key.Name, receipt.id, tostring(processed)))
+                return
+            end
+            lastActivity = now
+            -- User activity takes priority over the short synthetic hold.
+            if pressedKey then
+                local released, releaseErr = release()
+                if not released then disable("Release on real input: " .. tostring(releaseErr)) end
+            end
+        end
+        connect(UserInputService.InputBegan, function(input, processed) observe(input, true, processed) end)
+        connect(UserInputService.InputEnded, function(input, processed) observe(input, false, processed) end)
+        connect(UserInputService.InputChanged, function() lastActivity = os.clock() end)
+        connect(UserInputService.TextBoxFocused, function() lastActivity = os.clock() end)
+        connect(UserInputService.TextBoxFocusReleased, function() lastActivity = os.clock() end)
+        connect(UserInputService.WindowFocused, function() lastActivity = os.clock() end)
+        connect(player.Idled, function(seconds)
+            debugLog(string.format("IDLED %.1fs (observation only)", seconds))
+        end)
+        if enabled then state = "Waiting"; schedule(os.clock()) end
+        connect(RunService.Heartbeat, function()
+            if not running then return end
+            local now = os.clock()
+            if pressedKey and now >= releaseAt then
+                local released, releaseErr = release()
+                if not released then disable("KeyUp failed: " .. tostring(releaseErr))
+                else debugLog("RELEASE sent") end
+                -- A failed release is retried only by STOP, not every frame.
+                releaseAt = math.huge
+            end
+            if receipt and now >= receipt.checkAt then
+                if receipt.down and receipt.up then confirmed += 1 end
+                debugLog(string.format("CHECK #%d %s down=%s up=%s; this does NOT verify idle reset",
+                    receipt.id, receipt.key.Name, tostring(receipt.down), tostring(receipt.up)))
+                if enabled then state = if receipt.down and receipt.up then "Input observed" else "Input NOT observed" end
+                receipt = nil
+            end
+            if enabled and not pressedKey and now >= nextDue then
+                local checked, busy = pcall(function()
+                    return UserInputService:GetFocusedTextBox() ~= nil
+                        or #UserInputService:GetKeysPressed() > 0
+                        or #UserInputService:GetMouseButtonsPressed() > 0
+                        or #UserInputService:GetTouches() > 0
+                end)
+                if not checked then disable("Input check failed: " .. tostring(busy))
+                elseif busy or now - lastActivity < 3 then
+                    state = "Skipped: user active"
+                    debugLog("SKIP: user active/chat/key/mouse/touch; next randomized interval")
+                    schedule(now)
+                else
+                    local key = KEYS[math.random(1, #KEYS)]
+                    attempts += 1
+                    receipt = {id=attempts,key=key,down=false,up=false,checkAt=now+0.6}
+                    pressedKey, releaseAt = key, now + PRESS_SECONDS
+                    debugLog(string.format("SEND #%d %s via %s", attempts, key.Name, backend))
+                    local pressed, pressErr = pcall(function() sendKey(true, key) end)
+                    if not pressed then
+                        local released, releaseErr = release()
+                        disable("KeyDown failed: " .. tostring(pressErr) .. (released and "" or "; KeyUp: " .. tostring(releaseErr)))
+                    else
+                        sent += 1
+                        state = "Sent " .. key.Name
+                        schedule(now)
+                    end
+                end
+            end
+            if now >= nextUI then
+                nextUI = now + 0.25
+                statusLabel.Text = string.format("%s | %s\nSent %d / Observed %d\nNext %.1fs",
+                    backend, state, sent, confirmed, enabled and math.max(0, nextDue-now) or 0)
             end
         end)
-        print("[AntiAFK] Ready. Runs only on Idled; STOP removes it. Survives respawn.")
+        debugLog("Ready. Random 30-60s, F13/F14/F15. Success requires a real idle test.")
     end, function(message) return tostring(message) end)
-    if not ok then
-        warn("[AntiAFK] " .. err)
-        stop("error")
-    end
+    if not ok then warn("[AntiAFK] " .. err); stop("error") end
 end
