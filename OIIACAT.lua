@@ -1,8 +1,9 @@
 -- Physics OIIACAT: fixed 2s spin / 1.5s back-facing pause, WASD hover movement.
 do
-    print("[OIIACAT] Loaded revision 2")
+    print("[OIIACAT] Loaded revision 3")
     local LAUNCH_DELAY = 3
     local SPIN_RPS = 5
+    local CONTINUOUS_SPIN_RPS = 4
     local SPIN_SECONDS = 2
     local STARE_SECONDS = 1.5
     local HOVER_HEIGHT = 3
@@ -56,6 +57,8 @@ do
     local connections = {}
     local temporaryInstances = {}
     local controlGui
+    local continuousMode = false
+    local modeRevision = 0
     local held = {}
     local windowFocused = true
     local finishReason = "stopped"
@@ -148,7 +151,7 @@ do
 
         local panel = Instance.new("Frame")
         panel.Name = "Panel"
-        panel.Size = UDim2.fromOffset(184, 78)
+        panel.Size = UDim2.fromOffset(184, 124)
         panel.Position = UDim2.fromOffset(20, 160)
         panel.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
         panel.BorderSizePixel = 0
@@ -182,6 +185,28 @@ do
         local buttonCorner = Instance.new("UICorner")
         buttonCorner.CornerRadius = UDim.new(0, 7)
         buttonCorner.Parent = button
+
+        local modeButton = Instance.new("TextButton")
+        modeButton.Name = "ModeButton"
+        modeButton.Size = UDim2.new(1, -16, 0, 40)
+        modeButton.Position = UDim2.fromOffset(8, 76)
+        modeButton.BackgroundColor3 = Color3.fromRGB(48, 98, 158)
+        modeButton.BorderSizePixel = 0
+        modeButton.Text = "MODE: CYCLE (5 rps)"
+        modeButton.TextColor3 = Color3.new(1, 1, 1)
+        modeButton.Font = Enum.Font.GothamBold
+        modeButton.TextSize = 12
+        modeButton.Parent = panel
+        local modeCorner = Instance.new("UICorner")
+        modeCorner.CornerRadius = UDim.new(0, 7)
+        modeCorner.Parent = modeButton
+        connect(modeButton.Activated, function()
+            if not running then return end
+            continuousMode = not continuousMode
+            modeRevision += 1
+            modeButton.Text = if continuousMode then "MODE: NONSTOP (4 rps)" else "MODE: CYCLE (5 rps)"
+            print("[OIIACAT] " .. modeButton.Text)
+        end)
 
         local stopEvent = Instance.new("BindableEvent")
         stopEvent.Name = "StopRequested"
@@ -358,12 +383,21 @@ do
         local cycleSeconds = SPIN_SECONDS + STARE_SECONDS
         local started = os.clock()
         local lastCycle, wasStaring = 0, false
+        local appliedModeRevision = modeRevision
         local function updateControl(dt)
             local step = math.clamp(dt, 0, 0.1)
+            if modeRevision ~= appliedModeRevision then
+                -- Returning to CYCLE always starts a fresh two-second spin.
+                started = os.clock()
+                lastCycle, wasStaring = 0, false
+                appliedModeRevision = modeRevision
+            end
             local elapsed = math.max(0, os.clock() - started)
             local cycle = math.floor(elapsed / cycleSeconds)
-            local phase = elapsed - cycle * cycleSeconds
-            local staring = phase >= SPIN_SECONDS
+            local phase = if continuousMode then elapsed % HOVER_PERIOD else elapsed - cycle * cycleSeconds
+            local staring = not continuousMode and phase >= SPIN_SECONDS
+            local rps = if continuousMode then CONTINUOUS_SPIN_RPS else SPIN_RPS
+            spin.AngularVelocity = Vector3.yAxis * (2 * math.pi * rps)
             if cycle ~= lastCycle then lastCycle, wasStaring = cycle, false end
             local direction = getMoveDirection()
             center += direction * MOVE_SPEED * step
