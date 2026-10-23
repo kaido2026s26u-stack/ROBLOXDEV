@@ -1,13 +1,18 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 5")
+    print("[SelfLaunch] Loaded revision 6")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
     local DIRECTION_SPREAD = 20 -- Horizontal angle spread in degrees
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
-    local MAX_SECONDS = 4
+    local MAX_SECONDS = 12      -- Maximum physical flight / bounce phase
+    local MAX_BOUNCES = 4
+    local BOUNCE_RESTITUTION = 0.75
+    local TANGENTIAL_RETENTION = 0.85
+    local MIN_BOUNCE_SPEED = 12
+    local MIN_IMPACT_SPEED = 8
     local LAUNCH_DELAY = 3      -- Wait before changing character control
     local FORWARD_DISTANCE = 12 -- Scripted approach distance in studs
     local FORWARD_SECONDS = 0.8
@@ -129,21 +134,84 @@ do
         root:ApplyAngularImpulse(spinImpulse)
 
         local started = os.clock()
+        local previousVelocity = root.AssemblyLinearVelocity
+        local bounceCount = 0
+        local previousRebound = upwardSpeed
+        local armed = true
+        local lastBounceTime = -math.huge
+        local lastBounceY = nil
         local settledFor = 0
+
         while isCurrent() and os.clock() - started < MAX_SECONDS do
             local dt = RunService.Heartbeat:Wait()
             if not isCurrent() then break end
-            local elapsed = os.clock() - started
-            local reach = math.max(3.5, humanoid.HipHeight + root.Size.Y / 2 + 0.75)
+            if root.Anchored or humanoid.Sit or humanoid.PlatformStand then break end
+            local now = os.clock()
+            local velocity = root.AssemblyLinearVelocity
+            local supportHeight = humanoid.HipHeight + root.Size.Y / 2
+            local reach = math.max(4, supportHeight + 2)
             local hit = workspace:Raycast(root.Position, -Vector3.yAxis * reach, rayParams)
-            local nearGround = hit and hit.Normal.Y > 0.4
-            local slowVertical = math.abs(root.AssemblyLinearVelocity.Y) < 8
-            if elapsed > 0.35 and nearGround and slowVertical then
-                settledFor = settledFor + dt
-                if settledFor >= 0.15 then break end
-            else
-                settledFor = 0
+            local nearGround = hit and hit.Normal.Y > 0.6
+
+            -- Require an actual upward departure before another impact can bounce.
+            -- A short ray can still see the ground during the smaller bounces.
+            if not armed and lastBounceY and now - lastBounceTime > 0.05
+                and root.Position.Y > lastBounceY + 0.2 and velocity.Y > 0 then
+                armed = true
             end
+
+            local bounced = false
+            if nearGround and armed and now - lastBounceTime > 0.12 then
+                local normal = hit.Normal
+                local incomingNormal = previousVelocity:Dot(normal)
+                local currentNormal = velocity:Dot(normal)
+                -- A nearby floor alone is not an impact: look for the collision
+                -- interrupting downward motion (including a native upward rebound).
+                local impact = incomingNormal < -MIN_IMPACT_SPEED
+                    and currentNormal > incomingNormal * 0.55
+                if impact and bounceCount < MAX_BOUNCES then
+                    local rebound = math.min(
+                        -incomingNormal * BOUNCE_RESTITUTION,
+                        previousRebound * BOUNCE_RESTITUTION
+                    )
+                    if rebound >= MIN_BOUNCE_SPEED then
+                        local tangent = previousVelocity - normal * incomingNormal
+                        local targetVelocity = tangent * TANGENTIAL_RETENTION + normal * rebound
+                        local bounceMass = root.AssemblyMass
+                        assemblyRoot = root.AssemblyRootPart
+                        if bounceMass <= 0 or bounceMass == math.huge
+                            or (assemblyRoot and assemblyRoot.Anchored) then break end
+                        root:ApplyImpulse((targetVelocity - velocity) * bounceMass)
+                        bounceCount = bounceCount + 1
+                        previousRebound = rebound
+                        lastBounceTime = now
+                        lastBounceY = root.Position.Y
+                        armed = false
+                        settledFor = 0
+                        bounced = true
+
+                        local tumble = (
+                            right * randomBetween(-0.5, 0.5)
+                            + forward * randomBetween(-0.5, 0.5)
+                            + Vector3.yAxis * randomBetween(-0.25, 0.25)
+                        ) * (bounceMass * SPIN_STRENGTH * 0.25 * BOUNCE_RESTITUTION ^ bounceCount)
+                        root:ApplyAngularImpulse(tumble)
+                        print(string.format("[SelfLaunch] Bounce %d/%d: rebound %.1f",
+                            bounceCount, MAX_BOUNCES, rebound))
+                    end
+                end
+            end
+
+            if not bounced then
+                if nearGround and math.abs(velocity.Y) < 8 and now - lastBounceTime > 0.15
+                    and now - started > 0.35 then
+                    settledFor = settledFor + dt
+                    if settledFor >= 0.2 then break end
+                else
+                    settledFor = 0
+                end
+            end
+            previousVelocity = root.AssemblyLinearVelocity
         end
     end, function(message)
         return tostring(message)
