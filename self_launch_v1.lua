@@ -1,33 +1,27 @@
--- Self-launch: runs until STOP is pressed. No files or shared globals.
+-- Keyboard bounce movement: runs until STOP. No files or shared globals.
 -- A new execution requests cleanup of the previous execution first.
 do
-    print("[SelfLaunch] Loaded revision 10")
-    local BACK_SPEED = 70       -- Added backward speed (studs/second)
-    local UP_SPEED = 80         -- Added upward speed (studs/second)
-    local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
-    local DIRECTION_SPREAD = 20 -- Initial launch angle spread in degrees
-    local BOUNCE_DIRECTION_SPREAD = 24 -- Per-impact yaw, relative to incoming/reflected direction
-    local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
-    local BOUNCE_RESTITUTION = 0.97
-    local TANGENTIAL_RETENTION = 0.95
-    local WALL_RETENTION = 0.95
-    local MIN_BOUNCE_SPEED = 35
-    local MIN_IMPACT_SPEED = 8
-    local LAUNCH_DELAY = 3      -- Wait before changing character control
-    local FORWARD_DISTANCE = 12 -- Scripted approach distance in studs
-    local FORWARD_SECONDS = 0.8
-    local LIFT_HEIGHT = 4       -- Scripted lift before the physical launch
-    local LIFT_SECONDS = 0.4
+    print("[BounceMove] Loaded revision 11")
+    local MOVE_SPEED = 32       -- Horizontal target speed in studs/second
+    local BOUNCE_SPEED = 42     -- Constant vertical bounce speed (about 4.5 studs at default gravity)
+    local STEER_RESPONSE = 4.5
+    local BRAKE_RESPONSE = 4
+    local MAX_STEER_ACCEL = 70
+    local WALL_RETENTION = 0.75
+    local WALL_CONTROL_DELAY = 0.25
+    local MIN_IMPACT_SPEED = 5
+    local LAUNCH_DELAY = 3
 
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
+    local UserInputService = game:GetService("UserInputService")
     local player = Players.LocalPlayer
     local character = player and player.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     local root = character and character:FindFirstChild("HumanoidRootPart")
 
     if not humanoid or not root or not root:IsA("BasePart") then
-        warn("[SelfLaunch] Character is not ready.")
+        warn("[BounceMove] Character is not ready.")
         return
     end
     local assemblyRoot = root.AssemblyRootPart
@@ -35,12 +29,12 @@ do
     if humanoid.Health <= 0 or humanoid.Sit or humanoid.PlatformStand
         or root.Anchored or (assemblyRoot and assemblyRoot.Anchored)
         or mass <= 0 or mass == math.huge then
-        warn("[SelfLaunch] Cannot launch in the current state.")
+        warn("[BounceMove] Cannot launch in the current state.")
         return
     end
 
     local playerGui = player:WaitForChild("PlayerGui", 10)
-    if not playerGui then warn("[SelfLaunch] PlayerGui is unavailable."); return end
+    if not playerGui then warn("[BounceMove] PlayerGui is unavailable."); return end
     local GUI_NAME = "ROBLOXDEV_SelfLaunchControl"
     local previousControl = playerGui:FindFirstChild(GUI_NAME)
     if previousControl then
@@ -53,7 +47,7 @@ do
             end
         end
         if previousControl.Parent then
-            warn("[SelfLaunch] Previous run has not stopped; refusing duplicate.")
+            warn("[BounceMove] Previous run has not stopped; refusing duplicate.")
             return
         end
     end
@@ -61,6 +55,9 @@ do
     local running = true
     local cleanupDone = false
     local connections = {}
+    local temporaryInstances = {}
+    local held = {}
+    local windowFocused = true
     local controlGui
     local floorCount, wallCount = 0, 0
     local finishReason = "stopped"
@@ -79,11 +76,17 @@ do
         cleanupDone = true
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
+        table.clear(held)
+        for i = #temporaryInstances, 1, -1 do
+            local object = temporaryInstances[i]
+            pcall(function() object:Destroy() end)
+        end
+        table.clear(temporaryInstances)
         if changed then
             local restored, restoreErr = pcall(function()
                 if humanoid.Parent then humanoid.AutoRotate = oldAutoRotate end
             end)
-            if not restored then warn("[SelfLaunch] Restore failed: " .. tostring(restoreErr)) end
+            if not restored then warn("[BounceMove] Restore failed: " .. tostring(restoreErr)) end
             local recovered, recoveryErr = pcall(function()
                 if isCurrent() then
                     -- End the scripted movement, then let ordinary gravity take over.
@@ -92,7 +95,7 @@ do
                     humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
                 end
             end)
-            if not recovered then warn("[SelfLaunch] Recovery failed: " .. tostring(recoveryErr)) end
+            if not recovered then warn("[BounceMove] Recovery failed: " .. tostring(recoveryErr)) end
         end
         if controlGui then
             local gui = controlGui
@@ -143,7 +146,7 @@ do
         handle.Name = "DragHandle"
         handle.Size = UDim2.new(1, 0, 0, 28)
         handle.BackgroundTransparency = 1
-        handle.Text = "SELF LAUNCH  -  drag"
+        handle.Text = "BOUNCE MOVE  -  drag"
         handle.TextColor3 = Color3.fromRGB(210, 220, 235)
         handle.Font = Enum.Font.GothamBold
         handle.TextSize = 12
@@ -156,7 +159,7 @@ do
         button.Position = UDim2.fromOffset(8, 30)
         button.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
         button.BorderSizePixel = 0
-        button.Text = "STOP SELF LAUNCH"
+        button.Text = "STOP BOUNCE MOVE"
         button.TextColor3 = Color3.new(1, 1, 1)
         button.Font = Enum.Font.GothamBold
         button.TextSize = 14
@@ -213,7 +216,27 @@ do
 
     local ok, err = xpcall(function()
         makeControl()
-        print("[SelfLaunch] Starting approach in 3 seconds.")
+
+        local movementKeys = {
+            [Enum.KeyCode.W] = true, [Enum.KeyCode.A] = true,
+            [Enum.KeyCode.S] = true, [Enum.KeyCode.D] = true,
+        }
+        connect(UserInputService.InputBegan, function(input, processed)
+            if input.UserInputType ~= Enum.UserInputType.Keyboard or not movementKeys[input.KeyCode] then return end
+            if processed or not windowFocused or UserInputService:GetFocusedTextBox() then return end
+            held[input.KeyCode] = true
+        end)
+        connect(UserInputService.InputEnded, function(input)
+            if movementKeys[input.KeyCode] then held[input.KeyCode] = nil end
+        end)
+        connect(UserInputService.TextBoxFocused, function() table.clear(held) end)
+        connect(UserInputService.WindowFocusReleased, function()
+            windowFocused = false
+            table.clear(held)
+        end)
+        connect(UserInputService.WindowFocused, function() windowFocused = true end)
+
+        print("[BounceMove] Starting in 3 seconds. WASD to steer; STOP to finish.")
         local remaining = LAUNCH_DELAY
         while running and remaining > 0.000001 do
             local interval = math.min(0.05, remaining)
@@ -222,86 +245,79 @@ do
             if not isCurrent() then stop("character-changed-or-dead"); return end
         end
         if not running then return end
-        if not isCurrent() then
-            print("[SelfLaunch] Cancelled: character changed or died.")
-            return
-        end
+        if not isCurrent() then finishReason = "character-changed-or-dead"; return end
         assemblyRoot = root.AssemblyRootPart
         mass = root.AssemblyMass
         if humanoid.Sit or humanoid.PlatformStand or root.Anchored
             or (assemblyRoot and assemblyRoot.Anchored)
             or mass <= 0 or mass == math.huge then
-            print("[SelfLaunch] Cancelled: current state does not allow launch.")
-            return
+            finishReason = "character-state-changed"; return
         end
 
         local look = root.CFrame.LookVector
-        local forward = Vector3.new(look.X, 0, look.Z)
-        if forward.Magnitude < 0.001 then
-            forward = Vector3.new(0, 0, -1)
-        else
+        local lastForward = Vector3.new(look.X, 0, look.Z)
+        if lastForward.Magnitude < 0.001 then lastForward = Vector3.new(0, 0, -1)
+        else lastForward = lastForward.Unit end
+        local heading = lastForward
+        local function getMoveDirection()
+            if not windowFocused or UserInputService:GetFocusedTextBox() then
+                table.clear(held)
+                return Vector3.zero
+            end
+            local x = (held[Enum.KeyCode.D] and 1 or 0) - (held[Enum.KeyCode.A] and 1 or 0)
+            local z = (held[Enum.KeyCode.W] and 1 or 0) - (held[Enum.KeyCode.S] and 1 or 0)
+            if x == 0 and z == 0 then return Vector3.zero end
+            local camera = workspace.CurrentCamera
+            local cf = if camera then camera.CFrame else root.CFrame
+            local forward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if forward.Magnitude < 0.001 then
+                local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+                forward = if right.Magnitude > 0.001 then Vector3.yAxis:Cross(right.Unit) else lastForward
+            end
             forward = forward.Unit
+            lastForward = forward
+            local right = forward:Cross(Vector3.yAxis).Unit
+            local direction = forward * z + right * x
+            return if direction.Magnitude > 1 then direction.Unit else direction
         end
-        local right = forward:Cross(Vector3.yAxis).Unit
-        local function randomBetween(minimum, maximum)
-            return minimum + (maximum - minimum) * math.random()
-        end
-        local angle = math.rad(randomBetween(-DIRECTION_SPREAD, DIRECTION_SPREAD))
-        local horizontalDirection = -forward * math.cos(angle) + right * math.sin(angle)
-        local horizontalSpeed = BACK_SPEED * randomBetween(1 - SPEED_VARIATION, 1 + SPEED_VARIATION)
-        local upwardSpeed = UP_SPEED * randomBetween(1 - SPEED_VARIATION, 1 + SPEED_VARIATION)
-        local spinImpulse = (
-            -right * randomBetween(0.75, 1.25)
-            + forward * randomBetween(-0.45, 0.45)
-            + Vector3.yAxis * randomBetween(-0.30, 0.30)
-        ) * (mass * SPIN_STRENGTH)
-        local rayParams = RaycastParams.new()
-        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-        rayParams.FilterDescendantsInstances = { character }
-        rayParams.RespectCanCollide = true
 
         oldAutoRotate = humanoid.AutoRotate
         changed = true
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        -- Tween-like smoothstep interpolation. No anchors, constraints or Tween objects.
-        -- Each phase eases to zero speed before the next phase / physical impulse.
-        local function movePhase(offset, duration)
-            local startCFrame = root.CFrame
-            local elapsed = 0
-            while elapsed < duration do
-                local dt = RunService.Heartbeat:Wait()
-                if not running or not isCurrent() or root.Anchored or humanoid.Sit or humanoid.PlatformStand then
-                    return false
-                end
-                elapsed = math.min(elapsed + dt, duration)
-                local alpha = elapsed / duration
-                local eased = alpha * alpha * (3 - 2 * alpha)
-                local rate = 6 * alpha * (1 - alpha) / duration
-                root.CFrame = startCFrame + offset * eased
-                root.AssemblyLinearVelocity = offset * rate
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
+
+        -- Torque keeps the body upright; no scripted position or flight path.
+        local attachment = Instance.new("Attachment")
+        table.insert(temporaryInstances, attachment)
+        attachment.Name = "ROBLOXDEV_BounceAttachment"
+        attachment.Parent = root
+        local upright = Instance.new("AlignOrientation")
+        table.insert(temporaryInstances, upright)
+        upright.Name = "ROBLOXDEV_BounceUpright"
+        upright.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        upright.Attachment0 = attachment
+        upright.RigidityEnabled = false
+        upright.MaxTorque = mass * 3000
+        upright.MaxAngularVelocity = 12
+        upright.Responsiveness = 20
+        upright.CFrame = CFrame.lookAt(Vector3.zero, heading)
+        upright.Parent = root
+
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+        rayParams.FilterDescendantsInstances = { character }
+        rayParams.RespectCanCollide = true
+
+        local function applyTarget(target)
+            local currentMass = root.AssemblyMass
+            assemblyRoot = root.AssemblyRootPart
+            if currentMass <= 0 or currentMass == math.huge or root.Anchored
+                or (assemblyRoot and assemblyRoot.Anchored) then return false end
+            root:ApplyImpulse((target - root.AssemblyLinearVelocity) * currentMass)
             return true
         end
-
-        print("[SelfLaunch] Approach: forward 12 studs, then up 4 studs.")
-        if not movePhase(forward * FORWARD_DISTANCE, FORWARD_SECONDS) then return end
-        if not movePhase(Vector3.yAxis * LIFT_HEIGHT, LIFT_SECONDS) then return end
-        if not running or not isCurrent() then return end
-
-        -- Recheck the physical assembly after the scripted movement.
-        assemblyRoot = root.AssemblyRootPart
-        local launchMass = root.AssemblyMass
-        if root.Anchored or (assemblyRoot and assemblyRoot.Anchored)
-            or launchMass <= 0 or launchMass == math.huge then return end
-        spinImpulse = spinImpulse * (launchMass / mass)
-        mass = launchMass
-
-        print(string.format("[SelfLaunch] Launch: horizontal %.1f, up %.1f, angle %.1f deg",
-            horizontalSpeed, upwardSpeed, math.deg(angle)))
-        root:ApplyImpulse((horizontalDirection * horizontalSpeed + Vector3.yAxis * upwardSpeed) * mass)
-        root:ApplyAngularImpulse(spinImpulse)
+        root.AssemblyAngularVelocity = Vector3.zero
+        if not applyTarget(Vector3.yAxis * BOUNCE_SPEED) then finishReason = "invalid-assembly"; return end
 
         local started = os.clock()
         local floorArmed = true
@@ -310,7 +326,7 @@ do
         local fallingVelocity, fallingAt = nil, -math.huge
         local wallVelocity, wallVelocityAt = nil, -math.huge
         local settledFor = 0
-        local nextStatusAt = started + 2
+        local nextStatusAt = started + 3
 
         -- Refresh once at launch, keeping only physical body parts, not accessories.
         local bodyParts = {}
@@ -363,36 +379,18 @@ do
             return best
         end
 
-        local function varyBounceDirection(targetVelocity, surfaceNormal)
-            local horizontal = Vector3.new(targetVelocity.X, 0, targetVelocity.Z)
-            if horizontal.Magnitude < 0.5 then return targetVelocity, 0 end
-            local yaw = math.rad(randomBetween(-BOUNCE_DIRECTION_SPREAD, BOUNCE_DIRECTION_SPREAD))
-            -- Preserve vertical speed and horizontal magnitude. Reduce the angle
-            -- near grazing contacts rather than redirecting into the surface.
-            for _ = 1, 8 do
-                local c, s = math.cos(yaw), math.sin(yaw)
-                local turned = Vector3.new(horizontal.X * c - horizontal.Z * s, 0,
-                    horizontal.X * s + horizontal.Z * c)
-                local candidate = turned + Vector3.yAxis * targetVelocity.Y
-                if candidate:Dot(surfaceNormal) > 0.001 and turned:Dot(horizontal) > 0 then
-                    return candidate, math.deg(yaw)
-                end
-                yaw = yaw * 0.5
-            end
-            return targetVelocity, 0
-        end
 
-        local function applyVelocity(targetVelocity, tumbleScale)
-            local currentMass = root.AssemblyMass
-            assemblyRoot = root.AssemblyRootPart
-            if currentMass <= 0 or currentMass == math.huge or root.Anchored
-                or (assemblyRoot and assemblyRoot.Anchored) then return false end
-            root:ApplyImpulse((targetVelocity - root.AssemblyLinearVelocity) * currentMass)
-            local tumble = (right * randomBetween(-0.5, 0.5)
-                + forward * randomBetween(-0.5, 0.5)
-                + Vector3.yAxis * randomBetween(-0.25, 0.25)
-            ) * (currentMass * SPIN_STRENGTH * tumbleScale)
-            root:ApplyAngularImpulse(tumble)
+        local function floorHop(incomingHorizontal, normal, recovery)
+            local target = incomingHorizontal + Vector3.yAxis * BOUNCE_SPEED
+            local outward = target:Dot(normal)
+            if outward < 1 then target = target + Vector3.yAxis * ((1 - outward) / normal.Y) end
+            if not applyTarget(target) then return false end
+            floorCount = floorCount + 1
+            lastFloorTime, lastFloorY = os.clock(), root.Position.Y
+            floorArmed, settledFor = false, 0
+            fallingVelocity, fallingAt = nil, -math.huge
+            print(string.format("[BounceMove] %s %d: up %.1f",
+                recovery and "Recovery hop" or "Floor", floorCount, target.Y))
             return true
         end
 
@@ -407,103 +405,85 @@ do
             local velocity = root.AssemblyLinearVelocity
             local floorHit = getFloor()
             local nearGround = floorHit ~= nil
-            local bounced = false
+            local floorBounced, wallBounced = false, false
 
             if not floorArmed and lastFloorY and now - lastFloorTime > 0.05
                 and root.Position.Y > lastFloorY + 0.2 and velocity.Y > 0 then
                 floorArmed = true
             end
-
             if nearGround and floorArmed and now - lastFloorTime > 0.18
                 and fallingVelocity and now - fallingAt < 0.6 then
-                local normal = floorHit.Normal
-                local incomingNormal = fallingVelocity:Dot(normal)
-                local currentNormal = velocity:Dot(normal)
-                local impact = incomingNormal < -MIN_IMPACT_SPEED
-                    and currentNormal > incomingNormal * 0.6
-                if impact then
-                    -- Deliberately replenish energy: do not derive the next height
-                    -- from the (possibly already lost) collision speed.
-                    local rebound = math.max(MIN_BOUNCE_SPEED,
-                        upwardSpeed * BOUNCE_RESTITUTION ^ (floorCount + 1))
-                    local tangent = fallingVelocity - normal * incomingNormal
-                    local target = tangent * TANGENTIAL_RETENTION + normal * rebound
-                    if target.Y < rebound then target = target + Vector3.yAxis * (rebound - target.Y) end
-                    local directionChange
-                    target, directionChange = varyBounceDirection(target, normal)
-                    if not applyVelocity(target, 0.12 * BOUNCE_RESTITUTION ^ floorCount) then
-                        finishReason = "invalid-assembly"; break
-                    end
-                    floorCount = floorCount + 1
-                    lastFloorTime, lastFloorY = now, root.Position.Y
-                    floorArmed, bounced, settledFor = false, true, 0
-                    print(string.format(
-                        "[SelfLaunch] Floor %d: incoming %.1f -> target up %.1f, actual up %.1f, yaw %.1f deg",
-                        floorCount, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y, directionChange))
-                    fallingVelocity, fallingAt = nil, -math.huge
+                local toward = fallingVelocity:Dot(floorHit.Normal)
+                if toward < -MIN_IMPACT_SPEED and velocity:Dot(floorHit.Normal) > toward * 0.6 then
+                    local horizontal = Vector3.new(fallingVelocity.X, 0, fallingVelocity.Z)
+                    if not floorHop(horizontal, floorHit.Normal, false) then finishReason = "invalid-assembly"; break end
+                    floorBounced = true
                 end
             end
 
-            -- Wall reflection continues until STOP, independently of floor bounces.
-            if not bounced and wallVelocity and now - wallVelocityAt < 0.3
-                and now - lastWallTime > 0.2 then
-                local wallHit = getWall(wallVelocity, dt)
-                if wallHit then
-                    local flatNormal = Vector3.new(wallHit.Normal.X, 0, wallHit.Normal.Z).Unit
+            if not floorBounced and wallVelocity and now - wallVelocityAt < 0.3
+                and now - lastWallTime > WALL_CONTROL_DELAY then
+                local hit = getWall(wallVelocity, dt)
+                if hit then
+                    local normal = Vector3.new(hit.Normal.X, 0, hit.Normal.Z).Unit
                     local incoming = Vector3.new(wallVelocity.X, 0, wallVelocity.Z)
-                    local towardWall = incoming:Dot(flatNormal)
-                    local current = Vector3.new(velocity.X, 0, velocity.Z):Dot(flatNormal)
-                    if towardWall < -MIN_IMPACT_SPEED and current > towardWall * 0.6 then
-                        local reflected = (incoming - flatNormal * (2 * towardWall)) * WALL_RETENTION
-                        local target = reflected + Vector3.yAxis * velocity.Y
-                        local directionChange
-                        target, directionChange = varyBounceDirection(target, flatNormal)
-                        if not applyVelocity(target, 0.08) then finishReason = "invalid-assembly"; break end
+                    local toward = incoming:Dot(normal)
+                    local current = Vector3.new(velocity.X, 0, velocity.Z):Dot(normal)
+                    if toward < -MIN_IMPACT_SPEED and current > toward * 0.6 then
+                        local reflected = (incoming - normal * (2 * toward)) * WALL_RETENTION
+                        if not applyTarget(reflected + Vector3.yAxis * root.AssemblyLinearVelocity.Y) then
+                            finishReason = "invalid-assembly"; break
+                        end
                         wallCount = wallCount + 1
-                        lastWallTime, bounced, settledFor = now, true, 0
-                        print(string.format(
-                            "[SelfLaunch] Wall %d: incoming %.1f -> reflected %.1f, yaw %.1f deg",
-                            wallCount, incoming.Magnitude, reflected.Magnitude, directionChange))
+                        lastWallTime, settledFor, wallBounced = now, 0, true
+                        print(string.format("[BounceMove] Wall %d: steering paused %.2fs", wallCount, WALL_CONTROL_DELAY))
                     end
+                end
+            end
+
+            -- Only horizontal impulses steer/brake. Never overwrite the falling or
+            -- rising vertical velocity. Exponential response is frame-rate independent.
+            local direction = getMoveDirection()
+            if direction.Magnitude > 0.01 then heading = direction.Unit end
+            upright.CFrame = CFrame.lookAt(Vector3.zero, heading)
+            if now - lastWallTime >= WALL_CONTROL_DELAY then
+                local current = root.AssemblyLinearVelocity
+                local horizontal = Vector3.new(current.X, 0, current.Z)
+                local response = if direction.Magnitude > 0 then STEER_RESPONSE else BRAKE_RESPONSE
+                local step = math.min(dt, 0.1)
+                local change = (direction * MOVE_SPEED - horizontal) * (1 - math.exp(-response * step))
+                local maxChange = MAX_STEER_ACCEL * step
+                if change.Magnitude > maxChange then change = change.Unit * maxChange end
+                if change.Magnitude > 0.001 then
+                    if not applyTarget(current + change) then finishReason = "invalid-assembly"; break end
                 end
             end
 
             velocity = root.AssemblyLinearVelocity
-            if not bounced and velocity.Y < -MIN_IMPACT_SPEED then
+            if not floorBounced and velocity.Y < -MIN_IMPACT_SPEED then
                 fallingVelocity, fallingAt = velocity, now
             end
             if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > MIN_IMPACT_SPEED then
                 wallVelocity, wallVelocityAt = velocity, now
             end
 
-            if not bounced then
-                if nearGround and math.abs(velocity.Y) < 8 and now - lastFloorTime > 0.25
-                    and now - lastWallTime > 0.25 and now - started > 0.35 then
+            if not floorBounced and not wallBounced then
+                if nearGround and math.abs(velocity.Y) < 6 and now - lastFloorTime > 0.3
+                    and now - lastWallTime > WALL_CONTROL_DELAY and now - started > 0.2 then
                     settledFor = settledFor + dt
-                    if settledFor >= 0.6 then
-                        -- If native collision/friction leaves the body resting, restart
-                        -- one hop after a delay instead of ending the continuous mode.
-                        local rebound = math.max(MIN_BOUNCE_SPEED,
-                            upwardSpeed * BOUNCE_RESTITUTION ^ (floorCount + 1))
-                        local horizontal = Vector3.new(velocity.X, 0, velocity.Z) * TANGENTIAL_RETENTION
-                        local target = horizontal + Vector3.yAxis * rebound
-                        target = varyBounceDirection(target, floorHit.Normal)
-                        if not applyVelocity(target, 0.06) then finishReason = "invalid-assembly"; break end
-                        floorCount = floorCount + 1
-                        lastFloorTime, lastFloorY = now, root.Position.Y
-                        floorArmed, bounced, settledFor = false, true, 0
-                        fallingVelocity, fallingAt = nil, -math.huge
-                        print(string.format("[SelfLaunch] Recovery hop %d: target up %.1f",
-                            floorCount, rebound))
+                    if settledFor >= 0.45 then
+                        if not floorHop(Vector3.new(velocity.X, 0, velocity.Z), floorHit.Normal, true) then
+                            finishReason = "invalid-assembly"; break
+                        end
                     end
                 else
                     settledFor = 0
                 end
             end
             if now >= nextStatusAt then
-                print(string.format("[SelfLaunch] Status: floor=%d wall=%d nearGround=%s armed=%s vertical=%.1f",
-                    floorCount, wallCount, tostring(nearGround), tostring(floorArmed), velocity.Y))
-                nextStatusAt = now + 2
+                print(string.format("[BounceMove] Status: floor=%d wall=%d horizontal=%.1f vertical=%.1f",
+                    floorCount, wallCount, Vector3.new(velocity.X, 0, velocity.Z).Magnitude, velocity.Y))
+                nextStatusAt = now + 3
             end
         end
         if running and not isCurrent() then finishReason = "character-changed-or-dead" end
@@ -514,11 +494,7 @@ do
     running = false
     if not ok then finishReason = "error" end
     cleanup()
-    print(string.format("[SelfLaunch] End: %s; floor=%d wall=%d",
+    print(string.format("[BounceMove] End: %s; floor=%d wall=%d",
         finishReason, floorCount, wallCount))
-    if not ok then
-        warn("[SelfLaunch] " .. err)
-    else
-        print("[SelfLaunch] Finished.")
-    end
+    if not ok then warn("[BounceMove] " .. err) else print("[BounceMove] Finished.") end
 end
