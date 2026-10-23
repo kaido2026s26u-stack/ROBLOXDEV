@@ -1,18 +1,15 @@
--- Self-launch v1: run once on the local client. No files or shared globals.
--- Wait until this run finishes before executing it again.
+-- Self-launch: runs until STOP is pressed. No files or shared globals.
+-- A new execution requests cleanup of the previous execution first.
 do
-    print("[SelfLaunch] Loaded revision 9")
+    print("[SelfLaunch] Loaded revision 10")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
     local DIRECTION_SPREAD = 20 -- Initial launch angle spread in degrees
     local BOUNCE_DIRECTION_SPREAD = 24 -- Per-impact yaw, relative to incoming/reflected direction
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
-    local MAX_SECONDS = 30      -- Maximum physical flight / bounce phase
-    local MAX_BOUNCES = 10
     local BOUNCE_RESTITUTION = 0.97
     local TANGENTIAL_RETENTION = 0.95
-    local MAX_WALL_BOUNCES = 12
     local WALL_RETENTION = 0.95
     local MIN_BOUNCE_SPEED = 35
     local MIN_IMPACT_SPEED = 8
@@ -42,6 +39,31 @@ do
         return
     end
 
+    local playerGui = player:WaitForChild("PlayerGui", 10)
+    if not playerGui then warn("[SelfLaunch] PlayerGui is unavailable."); return end
+    local GUI_NAME = "ROBLOXDEV_SelfLaunchControl"
+    local previousControl = playerGui:FindFirstChild(GUI_NAME)
+    if previousControl then
+        local previousStop = previousControl:FindFirstChild("StopRequested")
+        if previousStop and previousStop:IsA("BindableEvent") then
+            previousStop:Fire("replaced-by-new-run")
+            for _ = 1, 20 do
+                if not previousControl.Parent then break end
+                task.wait(0.05)
+            end
+        end
+        if previousControl.Parent then
+            warn("[SelfLaunch] Previous run has not stopped; refusing duplicate.")
+            return
+        end
+    end
+
+    local running = true
+    local cleanupDone = false
+    local connections = {}
+    local controlGui
+    local floorCount, wallCount = 0, 0
+    local finishReason = "stopped"
     local oldAutoRotate = humanoid.AutoRotate
     local changed = false
     local function isCurrent()
@@ -52,9 +74,154 @@ do
             and humanoid.Health > 0
     end
 
+    local function cleanup()
+        if cleanupDone then return end
+        cleanupDone = true
+        for _, connection in ipairs(connections) do connection:Disconnect() end
+        table.clear(connections)
+        if changed then
+            local restored, restoreErr = pcall(function()
+                if humanoid.Parent then humanoid.AutoRotate = oldAutoRotate end
+            end)
+            if not restored then warn("[SelfLaunch] Restore failed: " .. tostring(restoreErr)) end
+            local recovered, recoveryErr = pcall(function()
+                if isCurrent() then
+                    -- End the scripted movement, then let ordinary gravity take over.
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+                end
+            end)
+            if not recovered then warn("[SelfLaunch] Recovery failed: " .. tostring(recoveryErr)) end
+        end
+        if controlGui then
+            local gui = controlGui
+            controlGui = nil
+            gui:Destroy()
+        end
+    end
+
+    local function stop(reason)
+        if not running then return end
+        running = false
+        finishReason = reason or "stop-button"
+        cleanup()
+    end
+
+    local function connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    local function makeControl()
+        local inputService = game:GetService("UserInputService")
+        local gui = Instance.new("ScreenGui")
+        controlGui = gui
+        gui.Name = GUI_NAME
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = 1001
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+        local host = Instance.new("Frame")
+        host.Size = UDim2.fromScale(1, 1)
+        host.BackgroundTransparency = 1
+        host.Parent = gui
+
+        local panel = Instance.new("Frame")
+        panel.Name = "Panel"
+        panel.Size = UDim2.fromOffset(184, 78)
+        panel.Position = UDim2.fromOffset(20, 160)
+        panel.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
+        panel.BorderSizePixel = 0
+        panel.Parent = host
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 10)
+        corner.Parent = panel
+
+        local handle = Instance.new("TextLabel")
+        handle.Name = "DragHandle"
+        handle.Size = UDim2.new(1, 0, 0, 28)
+        handle.BackgroundTransparency = 1
+        handle.Text = "SELF LAUNCH  -  drag"
+        handle.TextColor3 = Color3.fromRGB(210, 220, 235)
+        handle.Font = Enum.Font.GothamBold
+        handle.TextSize = 12
+        handle.Active = true
+        handle.Parent = panel
+
+        local button = Instance.new("TextButton")
+        button.Name = "StopButton"
+        button.Size = UDim2.new(1, -16, 0, 40)
+        button.Position = UDim2.fromOffset(8, 30)
+        button.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
+        button.BorderSizePixel = 0
+        button.Text = "STOP SELF LAUNCH"
+        button.TextColor3 = Color3.new(1, 1, 1)
+        button.Font = Enum.Font.GothamBold
+        button.TextSize = 14
+        button.Parent = panel
+        local buttonCorner = Instance.new("UICorner")
+        buttonCorner.CornerRadius = UDim.new(0, 7)
+        buttonCorner.Parent = button
+
+        local stopEvent = Instance.new("BindableEvent")
+        stopEvent.Name = "StopRequested"
+        stopEvent.Parent = gui
+        connect(stopEvent.Event, function(reason) stop(reason or "replaced-by-new-run") end)
+        connect(button.Activated, function() stop("stop-button") end)
+        connect(gui.Destroying, function()
+            if controlGui == gui then controlGui = nil end
+            stop("control-removed")
+        end)
+        connect(humanoid.Died, function() stop("character-died") end)
+        connect(player.CharacterRemoving, function(oldCharacter)
+            if oldCharacter == character then stop("character-removed") end
+        end)
+
+        local pointer, pressedAt, panelAt
+        local function place(position)
+            local bounds, size = host.AbsoluteSize, panel.AbsoluteSize
+            panel.Position = UDim2.fromOffset(
+                math.clamp(position.X, 0, math.max(0, bounds.X - size.X)),
+                math.clamp(position.Y, 0, math.max(0, bounds.Y - size.Y))
+            )
+        end
+        connect(handle.InputBegan, function(input)
+            if pointer or (input.UserInputType ~= Enum.UserInputType.MouseButton1
+                and input.UserInputType ~= Enum.UserInputType.Touch) then return end
+            pointer = input
+            pressedAt = Vector2.new(input.Position.X, input.Position.Y)
+            panelAt = Vector2.new(panel.Position.X.Offset, panel.Position.Y.Offset)
+        end)
+        connect(inputService.InputChanged, function(input)
+            if not pointer or not running then return end
+            local touch = pointer.UserInputType == Enum.UserInputType.Touch
+            if (touch and input ~= pointer)
+                or (not touch and input.UserInputType ~= Enum.UserInputType.MouseMovement) then return end
+            place(panelAt + Vector2.new(input.Position.X, input.Position.Y) - pressedAt)
+        end)
+        connect(inputService.InputEnded, function(input) if input == pointer then pointer = nil end end)
+        connect(inputService.WindowFocusReleased, function() pointer = nil end)
+        connect(host:GetPropertyChangedSignal("AbsoluteSize"), function()
+            pointer = nil
+            place(Vector2.new(panel.Position.X.Offset, panel.Position.Y.Offset))
+        end)
+        gui.Parent = playerGui
+        place(Vector2.new(20, 160))
+    end
+
     local ok, err = xpcall(function()
+        makeControl()
         print("[SelfLaunch] Starting approach in 3 seconds.")
-        task.wait(LAUNCH_DELAY)
+        local remaining = LAUNCH_DELAY
+        while running and remaining > 0.000001 do
+            local interval = math.min(0.05, remaining)
+            task.wait(interval)
+            remaining = remaining - interval
+            if not isCurrent() then stop("character-changed-or-dead"); return end
+        end
+        if not running then return end
         if not isCurrent() then
             print("[SelfLaunch] Cancelled: character changed or died.")
             return
@@ -104,7 +271,7 @@ do
             local elapsed = 0
             while elapsed < duration do
                 local dt = RunService.Heartbeat:Wait()
-                if not isCurrent() or root.Anchored or humanoid.Sit or humanoid.PlatformStand then
+                if not running or not isCurrent() or root.Anchored or humanoid.Sit or humanoid.PlatformStand then
                     return false
                 end
                 elapsed = math.min(elapsed + dt, duration)
@@ -121,7 +288,7 @@ do
         print("[SelfLaunch] Approach: forward 12 studs, then up 4 studs.")
         if not movePhase(forward * FORWARD_DISTANCE, FORWARD_SECONDS) then return end
         if not movePhase(Vector3.yAxis * LIFT_HEIGHT, LIFT_SECONDS) then return end
-        if not isCurrent() then return end
+        if not running or not isCurrent() then return end
 
         -- Recheck the physical assembly after the scripted movement.
         assemblyRoot = root.AssemblyRootPart
@@ -137,7 +304,6 @@ do
         root:ApplyAngularImpulse(spinImpulse)
 
         local started = os.clock()
-        local floorCount, wallCount = 0, 0
         local floorArmed = true
         local lastFloorTime, lastWallTime = -math.huge, -math.huge
         local lastFloorY = nil
@@ -145,7 +311,6 @@ do
         local wallVelocity, wallVelocityAt = nil, -math.huge
         local settledFor = 0
         local nextStatusAt = started + 2
-        local finishReason = "time-limit"
 
         -- Refresh once at launch, keeping only physical body parts, not accessories.
         local bodyParts = {}
@@ -231,8 +396,9 @@ do
             return true
         end
 
-        while isCurrent() and os.clock() - started < MAX_SECONDS do
+        while running and isCurrent() do
             local dt = RunService.Heartbeat:Wait()
+            if not running then break end
             if not isCurrent() then finishReason = "character-changed-or-dead"; break end
             if root.Anchored or humanoid.Sit or humanoid.PlatformStand then
                 finishReason = "character-state-changed"; break
@@ -255,7 +421,7 @@ do
                 local currentNormal = velocity:Dot(normal)
                 local impact = incomingNormal < -MIN_IMPACT_SPEED
                     and currentNormal > incomingNormal * 0.6
-                if impact and floorCount < MAX_BOUNCES then
+                if impact then
                     -- Deliberately replenish energy: do not derive the next height
                     -- from the (possibly already lost) collision speed.
                     local rebound = math.max(MIN_BOUNCE_SPEED,
@@ -272,15 +438,15 @@ do
                     lastFloorTime, lastFloorY = now, root.Position.Y
                     floorArmed, bounced, settledFor = false, true, 0
                     print(string.format(
-                        "[SelfLaunch] Floor %d/%d: incoming %.1f -> target up %.1f, actual up %.1f, yaw %.1f deg",
-                        floorCount, MAX_BOUNCES, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y, directionChange))
+                        "[SelfLaunch] Floor %d: incoming %.1f -> target up %.1f, actual up %.1f, yaw %.1f deg",
+                        floorCount, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y, directionChange))
                     fallingVelocity, fallingAt = nil, -math.huge
                 end
             end
 
-            -- Wall reflection is separate from the ten floor bounces.
+            -- Wall reflection continues until STOP, independently of floor bounces.
             if not bounced and wallVelocity and now - wallVelocityAt < 0.3
-                and now - lastWallTime > 0.2 and wallCount < MAX_WALL_BOUNCES then
+                and now - lastWallTime > 0.2 then
                 local wallHit = getWall(wallVelocity, dt)
                 if wallHit then
                     local flatNormal = Vector3.new(wallHit.Normal.X, 0, wallHit.Normal.Z).Unit
@@ -296,8 +462,8 @@ do
                         wallCount = wallCount + 1
                         lastWallTime, bounced, settledFor = now, true, 0
                         print(string.format(
-                            "[SelfLaunch] Wall %d/%d: incoming %.1f -> reflected %.1f, yaw %.1f deg",
-                            wallCount, MAX_WALL_BOUNCES, incoming.Magnitude, reflected.Magnitude, directionChange))
+                            "[SelfLaunch] Wall %d: incoming %.1f -> reflected %.1f, yaw %.1f deg",
+                            wallCount, incoming.Magnitude, reflected.Magnitude, directionChange))
                     end
                 end
             end
@@ -314,9 +480,21 @@ do
                 if nearGround and math.abs(velocity.Y) < 8 and now - lastFloorTime > 0.25
                     and now - lastWallTime > 0.25 and now - started > 0.35 then
                     settledFor = settledFor + dt
-                    if settledFor >= 0.3 then
-                        finishReason = if floorCount >= MAX_BOUNCES then "floor-limit-complete" else "settled-before-limit"
-                        break
+                    if settledFor >= 0.6 then
+                        -- If native collision/friction leaves the body resting, restart
+                        -- one hop after a delay instead of ending the continuous mode.
+                        local rebound = math.max(MIN_BOUNCE_SPEED,
+                            upwardSpeed * BOUNCE_RESTITUTION ^ (floorCount + 1))
+                        local horizontal = Vector3.new(velocity.X, 0, velocity.Z) * TANGENTIAL_RETENTION
+                        local target = horizontal + Vector3.yAxis * rebound
+                        target = varyBounceDirection(target, floorHit.Normal)
+                        if not applyVelocity(target, 0.06) then finishReason = "invalid-assembly"; break end
+                        floorCount = floorCount + 1
+                        lastFloorTime, lastFloorY = now, root.Position.Y
+                        floorArmed, bounced, settledFor = false, true, 0
+                        fallingVelocity, fallingAt = nil, -math.huge
+                        print(string.format("[SelfLaunch] Recovery hop %d: target up %.1f",
+                            floorCount, rebound))
                     end
                 else
                     settledFor = 0
@@ -328,28 +506,16 @@ do
                 nextStatusAt = now + 2
             end
         end
-        if not isCurrent() then finishReason = "character-changed-or-dead" end
-        print(string.format("[SelfLaunch] End: %s; floor=%d/%d wall=%d",
-            finishReason, floorCount, MAX_BOUNCES, wallCount))
+        if running and not isCurrent() then finishReason = "character-changed-or-dead" end
     end, function(message)
         return tostring(message)
     end)
 
-    -- Restore the original object only, even after an error or a respawn.
-    if changed then
-        local restored, restoreErr = pcall(function()
-            if humanoid.Parent then
-                humanoid.AutoRotate = oldAutoRotate
-            end
-        end)
-        if not restored then warn("[SelfLaunch] Restore failed: " .. tostring(restoreErr)) end
-        local recovered, recoveryErr = pcall(function()
-            if isCurrent() then
-                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-            end
-        end)
-        if not recovered then warn("[SelfLaunch] Recovery failed: " .. tostring(recoveryErr)) end
-    end
+    running = false
+    if not ok then finishReason = "error" end
+    cleanup()
+    print(string.format("[SelfLaunch] End: %s; floor=%d wall=%d",
+        finishReason, floorCount, wallCount))
     if not ok then
         warn("[SelfLaunch] " .. err)
     else
