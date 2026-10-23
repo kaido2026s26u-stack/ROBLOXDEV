@@ -1,7 +1,7 @@
 -- Stationary chaotic spinning dance. STOP restores normal character control.
 -- Shares the character-control slot with BounceMove to avoid competing forces.
 do
-    print("[EverydayShufflling] Loaded revision 1")
+    print("[EverydayShufflling] Loaded revision 2")
     local LAUNCH_DELAY = 3
     local MIN_SPIN = 5 * 2 * math.pi -- Target radians/second
     local MAX_SPIN = 9 * 2 * math.pi
@@ -58,6 +58,7 @@ do
     local finishReason = "stopped"
     local oldAutoRotate = humanoid.AutoRotate
     local changed = false
+    local cameraSnapshot
     local function isCurrent()
         return player.Character == character
             and character.Parent ~= nil
@@ -71,6 +72,22 @@ do
         cleanupDone = true
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
+        if cameraSnapshot then
+            local saved = cameraSnapshot
+            cameraSnapshot = nil
+            local restored, restoreErr = pcall(function()
+                local camera = saved.camera
+                if not camera.Parent then return end
+                camera.CFrame, camera.Focus = saved.cframe, saved.focus
+                local subject = saved.subject
+                if subject == humanoid and player.Character ~= character then
+                    subject = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+                end
+                if subject and subject.Parent then camera.CameraSubject = subject end
+                camera.CameraType = saved.kind
+            end)
+            if not restored then warn("[EverydayShufflling] Camera restore failed: " .. tostring(restoreErr)) end
+        end
         for i = #temporaryInstances, 1, -1 do
             local object = temporaryInstances[i]
             pcall(function() object:Destroy() end)
@@ -229,11 +246,39 @@ do
             finishReason = "character-state-changed"; return
         end
 
+        local camera = workspace.CurrentCamera
+        if not camera then finishReason = "camera-unavailable"; return end
+        local origin = root.Position
+        cameraSnapshot = {
+            camera = camera, kind = camera.CameraType, subject = camera.CameraSubject,
+            cframe = camera.CFrame, focus = camera.Focus,
+        }
+        -- Keep the starting viewing side. Never derive the view from the tumbling body.
+        local side = Vector3.new(camera.CFrame.Position.X - origin.X, 0,
+            camera.CFrame.Position.Z - origin.Z)
+        if side.Magnitude < 0.001 then
+            side = Vector3.new(-camera.CFrame.LookVector.X, 0, -camera.CFrame.LookVector.Z)
+        end
+        if side.Magnitude < 0.001 then side = Vector3.zAxis end
+        local focus = origin + Vector3.yAxis * 2
+        local viewport = camera.ViewportSize
+        local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 1
+        local distance = 22 / math.clamp(aspect, 0.5, 1)
+        local view = CFrame.lookAt(focus + side.Unit * distance + Vector3.yAxis * (distance * 0.3), focus)
+        local fixedFocus = CFrame.new(focus)
+        camera.CameraType = Enum.CameraType.Scriptable
+        camera.CFrame, camera.Focus = view, fixedFocus
+        connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
+            if workspace.CurrentCamera ~= camera then stop("camera-replaced") end
+        end)
+        connect(RunService.RenderStepped, function()
+            if not running then return end
+            camera.CFrame, camera.Focus = view, fixedFocus
+        end)
         oldAutoRotate = humanoid.AutoRotate
         changed = true
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        local origin = root.Position
         local attachment = Instance.new("Attachment")
         table.insert(temporaryInstances, attachment)
         attachment.Name = "ROBLOXDEV_ShuffleAttachment"
