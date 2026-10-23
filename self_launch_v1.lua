@@ -1,16 +1,16 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 6")
+    print("[SelfLaunch] Loaded revision 7")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
     local DIRECTION_SPREAD = 20 -- Horizontal angle spread in degrees
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
-    local MAX_SECONDS = 12      -- Maximum physical flight / bounce phase
-    local MAX_BOUNCES = 4
-    local BOUNCE_RESTITUTION = 0.75
-    local TANGENTIAL_RETENTION = 0.85
+    local MAX_SECONDS = 25      -- Maximum physical flight / bounce phase
+    local MAX_BOUNCES = 10
+    local BOUNCE_RESTITUTION = 0.92
+    local TANGENTIAL_RETENTION = 0.95
     local MIN_BOUNCE_SPEED = 12
     local MIN_IMPACT_SPEED = 8
     local LAUNCH_DELAY = 3      -- Wait before changing character control
