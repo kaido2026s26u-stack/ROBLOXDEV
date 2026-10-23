@@ -1,6 +1,7 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
+    print("[SelfLaunch] Loaded revision 2")
     local BACK_SPEED = 35       -- Added backward speed (studs/second)
     local UP_SPEED = 24         -- Added upward speed (studs/second)
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
