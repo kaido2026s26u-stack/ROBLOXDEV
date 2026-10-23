@@ -1,12 +1,16 @@
 -- Keyboard bounce movement: runs until STOP. No files or shared globals.
 -- A new execution requests cleanup of the previous execution first.
 do
-    print("[BounceMove] Loaded revision 11")
+    print("[BounceMove] Loaded revision 12")
     local MOVE_SPEED = 32       -- Horizontal target speed in studs/second
-    local BOUNCE_SPEED = 42     -- Constant vertical bounce speed (about 4.5 studs at default gravity)
-    local STEER_RESPONSE = 4.5
-    local BRAKE_RESPONSE = 4
-    local MAX_STEER_ACCEL = 70
+    local BOUNCE_SPEED = 60     -- About 9.2 studs at default gravity, before variation
+    local HEIGHT_VARIATION = 0.08
+    local SPIN_STRENGTH = 6     -- Angular impulse per unit mass
+    local SPIN_RETENTION = 0.8
+    local MAX_SPIN_SPEED = 10   -- Radians/second; cap collision and scripted spin
+    local STEER_RESPONSE = 2
+    local BRAKE_RESPONSE = 0.65
+    local MAX_STEER_ACCEL = 40
     local WALL_RETENTION = 0.75
     local WALL_CONTROL_DELAY = 0.25
     local MIN_IMPACT_SPEED = 5
@@ -258,7 +262,6 @@ do
         local lastForward = Vector3.new(look.X, 0, look.Z)
         if lastForward.Magnitude < 0.001 then lastForward = Vector3.new(0, 0, -1)
         else lastForward = lastForward.Unit end
-        local heading = lastForward
         local function getMoveDirection()
             if not windowFocused or UserInputService:GetFocusedTextBox() then
                 table.clear(held)
@@ -286,23 +289,8 @@ do
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
 
-        -- Torque keeps the body upright; no scripted position or flight path.
-        local attachment = Instance.new("Attachment")
-        table.insert(temporaryInstances, attachment)
-        attachment.Name = "ROBLOXDEV_BounceAttachment"
-        attachment.Parent = root
-        local upright = Instance.new("AlignOrientation")
-        table.insert(temporaryInstances, upright)
-        upright.Name = "ROBLOXDEV_BounceUpright"
-        upright.Mode = Enum.OrientationAlignmentMode.OneAttachment
-        upright.Attachment0 = attachment
-        upright.RigidityEnabled = false
-        upright.MaxTorque = mass * 3000
-        upright.MaxAngularVelocity = 12
-        upright.Responsiveness = 20
-        upright.CFrame = CFrame.lookAt(Vector3.zero, heading)
-        upright.Parent = root
-
+        -- No orientation constraint: the whole connected character can tumble.
+        -- Motor6D joints remain intact; this is not a joint-based ragdoll.
         local rayParams = RaycastParams.new()
         rayParams.FilterType = Enum.RaycastFilterType.Exclude
         rayParams.FilterDescendantsInstances = { character }
@@ -316,8 +304,34 @@ do
             root:ApplyImpulse((target - root.AssemblyLinearVelocity) * currentMass)
             return true
         end
-        root.AssemblyAngularVelocity = Vector3.zero
-        if not applyTarget(Vector3.yAxis * BOUNCE_SPEED) then finishReason = "invalid-assembly"; return end
+        local function centeredRandom()
+            -- Triangular distribution favors small changes over extremes.
+            return math.random() + math.random() - 1
+        end
+        local function bounceSpeed()
+            return BOUNCE_SPEED * (1 + HEIGHT_VARIATION * centeredRandom())
+        end
+        local function capSpin()
+            local angular = root.AssemblyAngularVelocity
+            if angular.Magnitude > MAX_SPIN_SPEED then
+                root.AssemblyAngularVelocity = angular.Unit * MAX_SPIN_SPEED
+            end
+        end
+        local function tumble(scale)
+            local angular = root.AssemblyAngularVelocity
+            local randomAxis = Vector3.new(centeredRandom(), centeredRandom() * 0.7, centeredRandom())
+            if randomAxis.Magnitude < 0.001 then randomAxis = Vector3.xAxis end
+            local axis = randomAxis.Unit
+            if angular.Magnitude > 1 then
+                -- Preserve spin direction rather than abruptly reversing it.
+                axis = (angular.Unit * 0.65 + axis * 0.35).Unit
+            end
+            root.AssemblyAngularVelocity = angular * SPIN_RETENTION
+            root:ApplyAngularImpulse(axis * root.AssemblyMass * SPIN_STRENGTH * scale)
+            capSpin()
+        end
+        if not applyTarget(Vector3.yAxis * bounceSpeed()) then finishReason = "invalid-assembly"; return end
+        tumble(1)
 
         local started = os.clock()
         local floorArmed = true
@@ -381,10 +395,11 @@ do
 
 
         local function floorHop(incomingHorizontal, normal, recovery)
-            local target = incomingHorizontal + Vector3.yAxis * BOUNCE_SPEED
+            local target = incomingHorizontal + Vector3.yAxis * bounceSpeed()
             local outward = target:Dot(normal)
             if outward < 1 then target = target + Vector3.yAxis * ((1 - outward) / normal.Y) end
             if not applyTarget(target) then return false end
+            tumble(1)
             floorCount = floorCount + 1
             lastFloorTime, lastFloorY = os.clock(), root.Position.Y
             floorArmed, settledFor = false, 0
@@ -434,6 +449,7 @@ do
                         if not applyTarget(reflected + Vector3.yAxis * root.AssemblyLinearVelocity.Y) then
                             finishReason = "invalid-assembly"; break
                         end
+                        tumble(0.6)
                         wallCount = wallCount + 1
                         lastWallTime, settledFor, wallBounced = now, 0, true
                         print(string.format("[BounceMove] Wall %d: steering paused %.2fs", wallCount, WALL_CONTROL_DELAY))
@@ -444,8 +460,7 @@ do
             -- Only horizontal impulses steer/brake. Never overwrite the falling or
             -- rising vertical velocity. Exponential response is frame-rate independent.
             local direction = getMoveDirection()
-            if direction.Magnitude > 0.01 then heading = direction.Unit end
-            upright.CFrame = CFrame.lookAt(Vector3.zero, heading)
+            capSpin()
             if now - lastWallTime >= WALL_CONTROL_DELAY then
                 local current = root.AssemblyLinearVelocity
                 local horizontal = Vector3.new(current.X, 0, current.Z)
@@ -454,7 +469,7 @@ do
                 local change = (direction * MOVE_SPEED - horizontal) * (1 - math.exp(-response * step))
                 local maxChange = MAX_STEER_ACCEL * step
                 if change.Magnitude > maxChange then change = change.Unit * maxChange end
-                if change.Magnitude > 0.001 then
+                if change.Magnitude > 0.00001 then
                     if not applyTarget(current + change) then finishReason = "invalid-assembly"; break end
                 end
             end
