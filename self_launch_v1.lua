@@ -1,9 +1,11 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 3")
+    print("[SelfLaunch] Loaded revision 4")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
-    local UP_SPEED = 40         -- Added upward speed (studs/second)
+    local UP_SPEED = 80         -- Added upward speed (studs/second)
+    local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
+    local DIRECTION_SPREAD = 20 -- Horizontal angle spread in degrees
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
     local MAX_SECONDS = 4
     local LAUNCH_DELAY = 3      -- Wait before changing character control
@@ -62,6 +64,18 @@ do
             forward = forward.Unit
         end
         local right = forward:Cross(Vector3.yAxis).Unit
+        local function randomBetween(minimum, maximum)
+            return minimum + (maximum - minimum) * math.random()
+        end
+        local angle = math.rad(randomBetween(-DIRECTION_SPREAD, DIRECTION_SPREAD))
+        local horizontalDirection = -forward * math.cos(angle) + right * math.sin(angle)
+        local horizontalSpeed = BACK_SPEED * randomBetween(1 - SPEED_VARIATION, 1 + SPEED_VARIATION)
+        local upwardSpeed = UP_SPEED * randomBetween(1 - SPEED_VARIATION, 1 + SPEED_VARIATION)
+        local spinImpulse = (
+            -right * randomBetween(0.75, 1.25)
+            + forward * randomBetween(-0.45, 0.45)
+            + Vector3.yAxis * randomBetween(-0.30, 0.30)
+        ) * (mass * SPIN_STRENGTH)
         local rayParams = RaycastParams.new()
         rayParams.FilterType = Enum.RaycastFilterType.Exclude
         rayParams.FilterDescendantsInstances = { character }
@@ -74,8 +88,10 @@ do
         RunService.Heartbeat:Wait()
         if not isCurrent() then return end
 
-        root:ApplyImpulse((-forward * BACK_SPEED + Vector3.yAxis * UP_SPEED) * mass)
-        root:ApplyAngularImpulse(-right * mass * SPIN_STRENGTH)
+        print(string.format("[SelfLaunch] Launch: horizontal %.1f, up %.1f, angle %.1f deg",
+            horizontalSpeed, upwardSpeed, math.deg(angle)))
+        root:ApplyImpulse((horizontalDirection * horizontalSpeed + Vector3.yAxis * upwardSpeed) * mass)
+        root:ApplyAngularImpulse(spinImpulse)
 
         local started = os.clock()
         local settledFor = 0
