@@ -1,11 +1,12 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 8")
+    print("[SelfLaunch] Loaded revision 9")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
-    local DIRECTION_SPREAD = 20 -- Horizontal angle spread in degrees
+    local DIRECTION_SPREAD = 20 -- Initial launch angle spread in degrees
+    local BOUNCE_DIRECTION_SPREAD = 24 -- Per-impact yaw, relative to incoming/reflected direction
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
     local MAX_SECONDS = 30      -- Maximum physical flight / bounce phase
     local MAX_BOUNCES = 10
@@ -197,6 +198,25 @@ do
             return best
         end
 
+        local function varyBounceDirection(targetVelocity, surfaceNormal)
+            local horizontal = Vector3.new(targetVelocity.X, 0, targetVelocity.Z)
+            if horizontal.Magnitude < 0.5 then return targetVelocity, 0 end
+            local yaw = math.rad(randomBetween(-BOUNCE_DIRECTION_SPREAD, BOUNCE_DIRECTION_SPREAD))
+            -- Preserve vertical speed and horizontal magnitude. Reduce the angle
+            -- near grazing contacts rather than redirecting into the surface.
+            for _ = 1, 8 do
+                local c, s = math.cos(yaw), math.sin(yaw)
+                local turned = Vector3.new(horizontal.X * c - horizontal.Z * s, 0,
+                    horizontal.X * s + horizontal.Z * c)
+                local candidate = turned + Vector3.yAxis * targetVelocity.Y
+                if candidate:Dot(surfaceNormal) > 0.001 and turned:Dot(horizontal) > 0 then
+                    return candidate, math.deg(yaw)
+                end
+                yaw = yaw * 0.5
+            end
+            return targetVelocity, 0
+        end
+
         local function applyVelocity(targetVelocity, tumbleScale)
             local currentMass = root.AssemblyMass
             assemblyRoot = root.AssemblyRootPart
@@ -243,6 +263,8 @@ do
                     local tangent = fallingVelocity - normal * incomingNormal
                     local target = tangent * TANGENTIAL_RETENTION + normal * rebound
                     if target.Y < rebound then target = target + Vector3.yAxis * (rebound - target.Y) end
+                    local directionChange
+                    target, directionChange = varyBounceDirection(target, normal)
                     if not applyVelocity(target, 0.12 * BOUNCE_RESTITUTION ^ floorCount) then
                         finishReason = "invalid-assembly"; break
                     end
@@ -250,8 +272,8 @@ do
                     lastFloorTime, lastFloorY = now, root.Position.Y
                     floorArmed, bounced, settledFor = false, true, 0
                     print(string.format(
-                        "[SelfLaunch] Floor %d/%d: incoming %.1f -> target up %.1f, actual up %.1f",
-                        floorCount, MAX_BOUNCES, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y))
+                        "[SelfLaunch] Floor %d/%d: incoming %.1f -> target up %.1f, actual up %.1f, yaw %.1f deg",
+                        floorCount, MAX_BOUNCES, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y, directionChange))
                     fallingVelocity, fallingAt = nil, -math.huge
                 end
             end
@@ -268,12 +290,14 @@ do
                     if towardWall < -MIN_IMPACT_SPEED and current > towardWall * 0.6 then
                         local reflected = (incoming - flatNormal * (2 * towardWall)) * WALL_RETENTION
                         local target = reflected + Vector3.yAxis * velocity.Y
+                        local directionChange
+                        target, directionChange = varyBounceDirection(target, flatNormal)
                         if not applyVelocity(target, 0.08) then finishReason = "invalid-assembly"; break end
                         wallCount = wallCount + 1
                         lastWallTime, bounced, settledFor = now, true, 0
                         print(string.format(
-                            "[SelfLaunch] Wall %d/%d: incoming %.1f -> reflected %.1f",
-                            wallCount, MAX_WALL_BOUNCES, incoming.Magnitude, reflected.Magnitude))
+                            "[SelfLaunch] Wall %d/%d: incoming %.1f -> reflected %.1f, yaw %.1f deg",
+                            wallCount, MAX_WALL_BOUNCES, incoming.Magnitude, reflected.Magnitude, directionChange))
                     end
                 end
             end
