@@ -1,6 +1,6 @@
--- Deterministic OIIACAT dance: 2s spin, 1.5s stare. STOP restores control.
+-- Physics OIIACAT: fixed 2s spin / 1.5s back-facing pause, WASD hover movement.
 do
-    print("[OIIACAT] Loaded revision 1")
+    print("[OIIACAT] Loaded revision 2")
     local LAUNCH_DELAY = 3
     local SPIN_RPS = 5
     local SPIN_SECONDS = 2
@@ -8,6 +8,9 @@ do
     local HOVER_HEIGHT = 3
     local HOVER_AMPLITUDE = 0.75
     local HOVER_PERIOD = 2
+    local MOVE_SPEED = 16
+    local MAX_HORIZONTAL_ACCEL = 120
+    local MAX_VERTICAL_ACCEL = 600
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
     local UserInputService = game:GetService("UserInputService")
@@ -53,9 +56,10 @@ do
     local connections = {}
     local temporaryInstances = {}
     local controlGui
+    local held = {}
+    local windowFocused = true
     local finishReason = "stopped"
     local oldAutoRotate = humanoid.AutoRotate
-    local oldAnchored = root.Anchored
     local changed = false
     local cameraSnapshot
     local function isCurrent()
@@ -71,6 +75,7 @@ do
         cleanupDone = true
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
+        table.clear(held)
         if cameraSnapshot then
             local saved = cameraSnapshot
             cameraSnapshot = nil
@@ -95,7 +100,6 @@ do
         if changed then
             local restored, restoreErr = pcall(function()
                 if humanoid.Parent then humanoid.AutoRotate = oldAutoRotate end
-                if root.Parent then root.Anchored = oldAnchored end
             end)
             if not restored then warn("[OIIACAT] Restore failed: " .. tostring(restoreErr)) end
             local recovered, recoveryErr = pcall(function()
@@ -227,6 +231,25 @@ do
 
     local ok, err = xpcall(function()
         makeControl()
+        local movementKeys = {
+            [Enum.KeyCode.W] = true, [Enum.KeyCode.A] = true,
+            [Enum.KeyCode.S] = true, [Enum.KeyCode.D] = true,
+        }
+        connect(UserInputService.InputBegan, function(input, processed)
+            if input.UserInputType ~= Enum.UserInputType.Keyboard or not movementKeys[input.KeyCode] then return end
+            if processed or not windowFocused or UserInputService:GetFocusedTextBox() then return end
+            held[input.KeyCode] = true
+        end)
+        connect(UserInputService.InputEnded, function(input)
+            if movementKeys[input.KeyCode] then held[input.KeyCode] = nil end
+        end)
+        connect(UserInputService.TextBoxFocused, function() table.clear(held) end)
+        connect(UserInputService.WindowFocusReleased, function()
+            windowFocused = false
+            table.clear(held)
+        end)
+        connect(UserInputService.WindowFocused, function() windowFocused = true end)
+
 
         print("[OIIACAT] Starting in 3 seconds. STOP to finish.")
         local remaining = LAUNCH_DELAY
@@ -277,61 +300,123 @@ do
         changed = true
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        -- Exact pose animation rather than ballistic simulation. Only this root
-        -- is temporarily anchored; all existing joints remain intact.
-        oldAnchored = root.Anchored
-        root.Anchored = true
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
         local look = root.CFrame.LookVector
-        local forward = Vector3.new(look.X, 0, look.Z)
-        if forward.Magnitude < 0.001 then forward = Vector3.new(0, 0, -1) end
-        local spinRotation = CFrame.lookAt(Vector3.zero, forward.Unit)
-        local stareRotation = spinRotation
+        local lastForward = Vector3.new(look.X, 0, look.Z)
+        if lastForward.Magnitude < 0.001 then lastForward = Vector3.new(0, 0, -1)
+        else lastForward = lastForward.Unit end
+        local function getMoveDirection()
+            if not windowFocused or UserInputService:GetFocusedTextBox() then
+                table.clear(held)
+                return Vector3.zero
+            end
+            local x = (held[Enum.KeyCode.D] and 1 or 0) - (held[Enum.KeyCode.A] and 1 or 0)
+            local z = (held[Enum.KeyCode.W] and 1 or 0) - (held[Enum.KeyCode.S] and 1 or 0)
+            if x == 0 and z == 0 then return Vector3.zero end
+            local camera = workspace.CurrentCamera
+            local cf = if camera then camera.CFrame else root.CFrame
+            local forward = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+            if forward.Magnitude < 0.001 then
+                local right = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z)
+                forward = if right.Magnitude > 0.001 then Vector3.yAxis:Cross(right.Unit) else lastForward
+            end
+            forward = forward.Unit
+            lastForward = forward
+            local right = forward:Cross(Vector3.yAxis).Unit
+            local direction = forward * z + right * x
+            return if direction.Magnitude > 1 then direction.Unit else direction
+        end
+
+        local attachment = Instance.new("Attachment")
+        table.insert(temporaryInstances, attachment)
+        attachment.Name = "ROBLOXDEV_OIIAAttachment"
+        -- Align the attachment's primary X axis with the body's vertical Y axis.
+        attachment.CFrame = CFrame.Angles(0, 0, math.pi / 2)
+        attachment.Parent = root
+        local spin = Instance.new("AngularVelocity")
+        table.insert(temporaryInstances, spin)
+        spin.Name = "ROBLOXDEV_OIIASpin"
+        spin.Attachment0 = attachment
+        spin.RelativeTo = Enum.ActuatorRelativeTo.World
+        spin.ReactionTorqueEnabled = false
+        spin.MaxTorque = mass * 20000
+        spin.AngularVelocity = Vector3.yAxis * (2 * math.pi * SPIN_RPS)
+        spin.Parent = root
+        local upright = Instance.new("AlignOrientation")
+        table.insert(temporaryInstances, upright)
+        upright.Name = "ROBLOXDEV_OIIAOrientation"
+        upright.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        upright.Attachment0 = attachment
+        upright.AlignType = Enum.AlignType.PrimaryAxisParallel
+        upright.CFrame = attachment.CFrame
+        upright.RigidityEnabled = false
+        upright.MaxTorque = mass * 12000
+        upright.MaxAngularVelocity = 50
+        upright.Responsiveness = 80
+        upright.Parent = root
+        local center = origin
+        local stareRotation = CFrame.lookAt(Vector3.zero, lastForward)
         local cycleSeconds = SPIN_SECONDS + STARE_SECONDS
         local started = os.clock()
         local lastCycle, wasStaring = 0, false
-        local function updatePose()
+        local function updateControl(dt)
+            local step = math.clamp(dt, 0, 0.1)
             local elapsed = math.max(0, os.clock() - started)
             local cycle = math.floor(elapsed / cycleSeconds)
             local phase = elapsed - cycle * cycleSeconds
             local staring = phase >= SPIN_SECONDS
-            if cycle ~= lastCycle then
-                spinRotation = stareRotation
-                lastCycle = cycle
-                wasStaring = false
-            end
-            local position = origin + Vector3.yAxis * HOVER_HEIGHT
-            local rotation
+            if cycle ~= lastCycle then lastCycle, wasStaring = cycle, false end
+            local direction = getMoveDirection()
+            center += direction * MOVE_SPEED * step
+            local position = center + Vector3.yAxis * HOVER_HEIGHT
+            local verticalFeed = 0
             if staring then
                 if not wasStaring then
-                    -- Snapshot once. Moving the camera during this pause does not
-                    -- turn the body into a tracking turret.
-                    local toward = camera.CFrame.Position - position
-                    toward = Vector3.new(toward.X, 0, toward.Z)
-                    if toward.Magnitude > 0.001 then
-                        stareRotation = CFrame.lookAt(Vector3.zero, toward.Unit)
-                    else
-                        stareRotation = spinRotation
-                    end
+                    local away = root.Position - camera.CFrame.Position
+                    away = Vector3.new(away.X, 0, away.Z)
+                    if away.Magnitude < 0.001 then away = lastForward end
+                    stareRotation = CFrame.lookAt(Vector3.zero, away.Unit)
                 end
-                rotation = stareRotation
+                spin.Enabled = false
+                upright.AlignType = Enum.AlignType.AllAxes
+                upright.CFrame = stareRotation * attachment.CFrame
             else
+                upright.AlignType = Enum.AlignType.PrimaryAxisParallel
+                upright.CFrame = attachment.CFrame
+                spin.Enabled = true
                 position += Vector3.yAxis * (HOVER_AMPLITUDE * math.sin(2 * math.pi * phase / HOVER_PERIOD))
-                rotation = spinRotation * CFrame.Angles(0, 2 * math.pi * SPIN_RPS * phase, 0)
+                verticalFeed = HOVER_AMPLITUDE * (2 * math.pi / HOVER_PERIOD)
+                    * math.cos(2 * math.pi * phase / HOVER_PERIOD)
             end
             wasStaring = staring
-            root.CFrame = CFrame.new(position) * rotation
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
+            local currentMass = root.AssemblyMass
+            spin.MaxTorque, upright.MaxTorque = currentMass * 20000, currentMass * 12000
+            local velocity = root.AssemblyLinearVelocity
+            local error = position - root.Position
+            local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
+            local targetHorizontal = direction * MOVE_SPEED + Vector3.new(error.X, 0, error.Z) * 6
+            if targetHorizontal.Magnitude > 32 then targetHorizontal = targetHorizontal.Unit * 32 end
+            local change = (targetHorizontal - horizontal) * (1 - math.exp(-12 * step))
+            local limit = MAX_HORIZONTAL_ACCEL * step
+            if change.Magnitude > limit then change = change.Unit * limit end
+            local targetY = math.clamp(verticalFeed + error.Y * 12, -30, 30)
+            local changeY = (targetY - velocity.Y) * (1 - math.exp(-18 * step)) + workspace.Gravity * step
+            changeY = math.clamp(changeY, -MAX_VERTICAL_ACCEL * step, MAX_VERTICAL_ACCEL * step)
+            if step > 0 then root:ApplyImpulse((change + Vector3.yAxis * changeY) * currentMass) end
+            -- The observation point follows horizontal travel, never body rotation or bobbing.
+            cameraTarget.CFrame = CFrame.new(root.Position.X, origin.Y + HOVER_HEIGHT, root.Position.Z)
         end
-        updatePose()
+        updateControl(0)
         while running and isCurrent() do
-            RunService.Heartbeat:Wait()
+            local dt = RunService.PreSimulation:Wait()
             if not running then break end
             if not isCurrent() then finishReason = "character-changed-or-dead"; break end
-            if humanoid.Sit or humanoid.PlatformStand then finishReason = "character-state-changed"; break end
-            updatePose()
+            local currentMass = root.AssemblyMass
+            local ar = root.AssemblyRootPart
+            if humanoid.Sit or humanoid.PlatformStand or root.Anchored or (ar and ar.Anchored)
+                or currentMass <= 0 or currentMass == math.huge then
+                finishReason = "character-state-changed"; break
+            end
+            updateControl(dt)
         end
         if running and not isCurrent() then finishReason = "character-changed-or-dead" end
     end, function(message) return tostring(message) end)
