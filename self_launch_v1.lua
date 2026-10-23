@@ -1,11 +1,12 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 2")
-    local BACK_SPEED = 35       -- Added backward speed (studs/second)
-    local UP_SPEED = 24         -- Added upward speed (studs/second)
+    print("[SelfLaunch] Loaded revision 3")
+    local BACK_SPEED = 70       -- Added backward speed (studs/second)
+    local UP_SPEED = 40         -- Added upward speed (studs/second)
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
     local MAX_SECONDS = 4
+    local LAUNCH_DELAY = 3      -- Wait before changing character control
 
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -38,6 +39,21 @@ do
     end
 
     local ok, err = xpcall(function()
+        print("[SelfLaunch] Launching in 3 seconds.")
+        task.wait(LAUNCH_DELAY)
+        if not isCurrent() then
+            print("[SelfLaunch] Cancelled: character changed or died.")
+            return
+        end
+        assemblyRoot = root.AssemblyRootPart
+        mass = root.AssemblyMass
+        if humanoid.Sit or humanoid.PlatformStand or root.Anchored
+            or (assemblyRoot and assemblyRoot.Anchored)
+            or mass <= 0 or mass == math.huge then
+            print("[SelfLaunch] Cancelled: current state does not allow launch.")
+            return
+        end
+
         local look = root.CFrame.LookVector
         local forward = Vector3.new(look.X, 0, look.Z)
         if forward.Magnitude < 0.001 then
@@ -51,6 +67,7 @@ do
         rayParams.FilterDescendantsInstances = { character }
         rayParams.RespectCanCollide = true
 
+        oldAutoRotate = humanoid.AutoRotate
         changed = true
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
