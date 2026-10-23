@@ -1,7 +1,7 @@
 -- Stationary chaotic spinning dance. STOP restores normal character control.
 -- Shares the character-control slot with BounceMove to avoid competing forces.
 do
-    print("[EverydayShufflling] Loaded revision 2")
+    print("[EverydayShufflling] Loaded revision 3")
     local LAUNCH_DELAY = 3
     local MIN_SPIN = 5 * 2 * math.pi -- Target radians/second
     local MAX_SPIN = 9 * 2 * math.pi
@@ -253,28 +253,26 @@ do
             camera = camera, kind = camera.CameraType, subject = camera.CameraSubject,
             cframe = camera.CFrame, focus = camera.Focus,
         }
-        -- Keep the starting viewing side. Never derive the view from the tumbling body.
-        local side = Vector3.new(camera.CFrame.Position.X - origin.X, 0,
-            camera.CFrame.Position.Z - origin.Z)
-        if side.Magnitude < 0.001 then
-            side = Vector3.new(-camera.CFrame.LookVector.X, 0, -camera.CFrame.LookVector.Z)
-        end
-        if side.Magnitude < 0.001 then side = Vector3.zAxis end
-        local focus = origin + Vector3.yAxis * 2
-        local viewport = camera.ViewportSize
-        local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 1
-        local distance = 22 / math.clamp(aspect, 0.5, 1)
-        local view = CFrame.lookAt(focus + side.Unit * distance + Vector3.yAxis * (distance * 0.3), focus)
-        local fixedFocus = CFrame.new(focus)
-        camera.CameraType = Enum.CameraType.Scriptable
-        camera.CFrame, camera.Focus = view, fixedFocus
+        -- Only the camera subject is fixed. Roblox's normal camera controller
+        -- owns orbit, zoom, CFrame and Focus throughout the dance.
+        local cameraTarget = Instance.new("Part")
+        table.insert(temporaryInstances, cameraTarget)
+        cameraTarget.Name = "ROBLOXDEV_ShuffleCameraTarget"
+        cameraTarget.Size = Vector3.new(0.2, 0.2, 0.2)
+        cameraTarget.Anchored = true
+        cameraTarget.Transparency = 1
+        cameraTarget.CanCollide = false
+        cameraTarget.CanTouch = false
+        cameraTarget.CanQuery = false
+        cameraTarget.CastShadow = false
+        cameraTarget.CFrame = CFrame.new(origin + Vector3.yAxis * 2)
+        cameraTarget.Parent = workspace
+        camera.CameraSubject = cameraTarget
+        camera.CameraType = Enum.CameraType.Custom
         connect(workspace:GetPropertyChangedSignal("CurrentCamera"), function()
             if workspace.CurrentCamera ~= camera then stop("camera-replaced") end
         end)
-        connect(RunService.RenderStepped, function()
-            if not running then return end
-            camera.CFrame, camera.Focus = view, fixedFocus
-        end)
+        connect(cameraTarget.Destroying, function() stop("camera-target-removed") end)
         oldAutoRotate = humanoid.AutoRotate
         changed = true
         humanoid.AutoRotate = false
