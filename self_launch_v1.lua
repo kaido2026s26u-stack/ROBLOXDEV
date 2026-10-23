@@ -1,17 +1,19 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 7")
+    print("[SelfLaunch] Loaded revision 8")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
     local DIRECTION_SPREAD = 20 -- Horizontal angle spread in degrees
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
-    local MAX_SECONDS = 25      -- Maximum physical flight / bounce phase
+    local MAX_SECONDS = 30      -- Maximum physical flight / bounce phase
     local MAX_BOUNCES = 10
-    local BOUNCE_RESTITUTION = 0.92
+    local BOUNCE_RESTITUTION = 0.97
     local TANGENTIAL_RETENTION = 0.95
-    local MIN_BOUNCE_SPEED = 12
+    local MAX_WALL_BOUNCES = 12
+    local WALL_RETENTION = 0.95
+    local MIN_BOUNCE_SPEED = 35
     local MIN_IMPACT_SPEED = 8
     local LAUNCH_DELAY = 3      -- Wait before changing character control
     local FORWARD_DISTANCE = 12 -- Scripted approach distance in studs
@@ -134,85 +136,177 @@ do
         root:ApplyAngularImpulse(spinImpulse)
 
         local started = os.clock()
-        local previousVelocity = root.AssemblyLinearVelocity
-        local bounceCount = 0
-        local previousRebound = upwardSpeed
-        local armed = true
-        local lastBounceTime = -math.huge
-        local lastBounceY = nil
+        local floorCount, wallCount = 0, 0
+        local floorArmed = true
+        local lastFloorTime, lastWallTime = -math.huge, -math.huge
+        local lastFloorY = nil
+        local fallingVelocity, fallingAt = nil, -math.huge
+        local wallVelocity, wallVelocityAt = nil, -math.huge
         local settledFor = 0
+        local nextStatusAt = started + 2
+        local finishReason = "time-limit"
+
+        -- Refresh once at launch, keeping only physical body parts, not accessories.
+        local bodyParts = {}
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide
+                and not part:FindFirstAncestorOfClass("Accessory") then
+                table.insert(bodyParts, part)
+            end
+        end
+
+        local function getFloor()
+            local support = humanoid.HipHeight + root.Size.Y / 2
+            local best = workspace:Raycast(root.Position,
+                -Vector3.yAxis * math.max(4, support + 2), rayParams)
+            if best and best.Normal.Y <= 0.6 then best = nil end
+            -- Limb/torso probes help when the character is tilted or tumbling.
+            for _, part in ipairs(bodyParts) do
+                if part.Parent and part.CanCollide then
+                    local cf, size = part.CFrame, part.Size
+                    local halfHeight = (math.abs(cf.RightVector.Y) * size.X
+                        + math.abs(cf.UpVector.Y) * size.Y
+                        + math.abs(cf.LookVector.Y) * size.Z) / 2
+                    local hit = workspace:Raycast(part.Position,
+                        -Vector3.yAxis * (halfHeight + 0.6), rayParams)
+                    if hit and hit.Normal.Y > 0.6 and (not best or hit.Distance < best.Distance) then
+                        best = hit
+                    end
+                end
+            end
+            return best
+        end
+
+        local function getWall(incoming, dt)
+            local horizontal = Vector3.new(incoming.X, 0, incoming.Z)
+            if horizontal.Magnitude < MIN_IMPACT_SPEED then return nil end
+            local direction = horizontal.Unit
+            local best
+            local function probe(part)
+                if not part.Parent then return end
+                local reach = math.max(1, part.Size.Magnitude / 2 + 0.35)
+                    + math.min(horizontal.Magnitude * dt, 3)
+                local hit = workspace:Raycast(part.Position, direction * reach, rayParams)
+                if hit and math.abs(hit.Normal.Y) < 0.5
+                    and (not best or hit.Distance < best.Distance) then best = hit end
+            end
+            probe(root)
+            for _, part in ipairs(bodyParts) do
+                if part ~= root and part.CanCollide then probe(part) end
+            end
+            return best
+        end
+
+        local function applyVelocity(targetVelocity, tumbleScale)
+            local currentMass = root.AssemblyMass
+            assemblyRoot = root.AssemblyRootPart
+            if currentMass <= 0 or currentMass == math.huge or root.Anchored
+                or (assemblyRoot and assemblyRoot.Anchored) then return false end
+            root:ApplyImpulse((targetVelocity - root.AssemblyLinearVelocity) * currentMass)
+            local tumble = (right * randomBetween(-0.5, 0.5)
+                + forward * randomBetween(-0.5, 0.5)
+                + Vector3.yAxis * randomBetween(-0.25, 0.25)
+            ) * (currentMass * SPIN_STRENGTH * tumbleScale)
+            root:ApplyAngularImpulse(tumble)
+            return true
+        end
 
         while isCurrent() and os.clock() - started < MAX_SECONDS do
             local dt = RunService.Heartbeat:Wait()
-            if not isCurrent() then break end
-            if root.Anchored or humanoid.Sit or humanoid.PlatformStand then break end
+            if not isCurrent() then finishReason = "character-changed-or-dead"; break end
+            if root.Anchored or humanoid.Sit or humanoid.PlatformStand then
+                finishReason = "character-state-changed"; break
+            end
             local now = os.clock()
             local velocity = root.AssemblyLinearVelocity
-            local supportHeight = humanoid.HipHeight + root.Size.Y / 2
-            local reach = math.max(4, supportHeight + 2)
-            local hit = workspace:Raycast(root.Position, -Vector3.yAxis * reach, rayParams)
-            local nearGround = hit and hit.Normal.Y > 0.6
+            local floorHit = getFloor()
+            local nearGround = floorHit ~= nil
+            local bounced = false
 
-            -- Require an actual upward departure before another impact can bounce.
-            -- A short ray can still see the ground during the smaller bounces.
-            if not armed and lastBounceY and now - lastBounceTime > 0.05
-                and root.Position.Y > lastBounceY + 0.2 and velocity.Y > 0 then
-                armed = true
+            if not floorArmed and lastFloorY and now - lastFloorTime > 0.05
+                and root.Position.Y > lastFloorY + 0.2 and velocity.Y > 0 then
+                floorArmed = true
             end
 
-            local bounced = false
-            if nearGround and armed and now - lastBounceTime > 0.12 then
-                local normal = hit.Normal
-                local incomingNormal = previousVelocity:Dot(normal)
+            if nearGround and floorArmed and now - lastFloorTime > 0.18
+                and fallingVelocity and now - fallingAt < 0.6 then
+                local normal = floorHit.Normal
+                local incomingNormal = fallingVelocity:Dot(normal)
                 local currentNormal = velocity:Dot(normal)
-                -- A nearby floor alone is not an impact: look for the collision
-                -- interrupting downward motion (including a native upward rebound).
                 local impact = incomingNormal < -MIN_IMPACT_SPEED
-                    and currentNormal > incomingNormal * 0.55
-                if impact and bounceCount < MAX_BOUNCES then
-                    local rebound = math.min(
-                        -incomingNormal * BOUNCE_RESTITUTION,
-                        previousRebound * BOUNCE_RESTITUTION
-                    )
-                    if rebound >= MIN_BOUNCE_SPEED then
-                        local tangent = previousVelocity - normal * incomingNormal
-                        local targetVelocity = tangent * TANGENTIAL_RETENTION + normal * rebound
-                        local bounceMass = root.AssemblyMass
-                        assemblyRoot = root.AssemblyRootPart
-                        if bounceMass <= 0 or bounceMass == math.huge
-                            or (assemblyRoot and assemblyRoot.Anchored) then break end
-                        root:ApplyImpulse((targetVelocity - velocity) * bounceMass)
-                        bounceCount = bounceCount + 1
-                        previousRebound = rebound
-                        lastBounceTime = now
-                        lastBounceY = root.Position.Y
-                        armed = false
-                        settledFor = 0
-                        bounced = true
+                    and currentNormal > incomingNormal * 0.6
+                if impact and floorCount < MAX_BOUNCES then
+                    -- Deliberately replenish energy: do not derive the next height
+                    -- from the (possibly already lost) collision speed.
+                    local rebound = math.max(MIN_BOUNCE_SPEED,
+                        upwardSpeed * BOUNCE_RESTITUTION ^ (floorCount + 1))
+                    local tangent = fallingVelocity - normal * incomingNormal
+                    local target = tangent * TANGENTIAL_RETENTION + normal * rebound
+                    if target.Y < rebound then target = target + Vector3.yAxis * (rebound - target.Y) end
+                    if not applyVelocity(target, 0.12 * BOUNCE_RESTITUTION ^ floorCount) then
+                        finishReason = "invalid-assembly"; break
+                    end
+                    floorCount = floorCount + 1
+                    lastFloorTime, lastFloorY = now, root.Position.Y
+                    floorArmed, bounced, settledFor = false, true, 0
+                    print(string.format(
+                        "[SelfLaunch] Floor %d/%d: incoming %.1f -> target up %.1f, actual up %.1f",
+                        floorCount, MAX_BOUNCES, -incomingNormal, rebound, root.AssemblyLinearVelocity.Y))
+                    fallingVelocity, fallingAt = nil, -math.huge
+                end
+            end
 
-                        local tumble = (
-                            right * randomBetween(-0.5, 0.5)
-                            + forward * randomBetween(-0.5, 0.5)
-                            + Vector3.yAxis * randomBetween(-0.25, 0.25)
-                        ) * (bounceMass * SPIN_STRENGTH * 0.25 * BOUNCE_RESTITUTION ^ bounceCount)
-                        root:ApplyAngularImpulse(tumble)
-                        print(string.format("[SelfLaunch] Bounce %d/%d: rebound %.1f",
-                            bounceCount, MAX_BOUNCES, rebound))
+            -- Wall reflection is separate from the ten floor bounces.
+            if not bounced and wallVelocity and now - wallVelocityAt < 0.3
+                and now - lastWallTime > 0.2 and wallCount < MAX_WALL_BOUNCES then
+                local wallHit = getWall(wallVelocity, dt)
+                if wallHit then
+                    local flatNormal = Vector3.new(wallHit.Normal.X, 0, wallHit.Normal.Z).Unit
+                    local incoming = Vector3.new(wallVelocity.X, 0, wallVelocity.Z)
+                    local towardWall = incoming:Dot(flatNormal)
+                    local current = Vector3.new(velocity.X, 0, velocity.Z):Dot(flatNormal)
+                    if towardWall < -MIN_IMPACT_SPEED and current > towardWall * 0.6 then
+                        local reflected = (incoming - flatNormal * (2 * towardWall)) * WALL_RETENTION
+                        local target = reflected + Vector3.yAxis * velocity.Y
+                        if not applyVelocity(target, 0.08) then finishReason = "invalid-assembly"; break end
+                        wallCount = wallCount + 1
+                        lastWallTime, bounced, settledFor = now, true, 0
+                        print(string.format(
+                            "[SelfLaunch] Wall %d/%d: incoming %.1f -> reflected %.1f",
+                            wallCount, MAX_WALL_BOUNCES, incoming.Magnitude, reflected.Magnitude))
                     end
                 end
             end
 
+            velocity = root.AssemblyLinearVelocity
+            if not bounced and velocity.Y < -MIN_IMPACT_SPEED then
+                fallingVelocity, fallingAt = velocity, now
+            end
+            if Vector3.new(velocity.X, 0, velocity.Z).Magnitude > MIN_IMPACT_SPEED then
+                wallVelocity, wallVelocityAt = velocity, now
+            end
+
             if not bounced then
-                if nearGround and math.abs(velocity.Y) < 8 and now - lastBounceTime > 0.15
-                    and now - started > 0.35 then
+                if nearGround and math.abs(velocity.Y) < 8 and now - lastFloorTime > 0.25
+                    and now - lastWallTime > 0.25 and now - started > 0.35 then
                     settledFor = settledFor + dt
-                    if settledFor >= 0.2 then break end
+                    if settledFor >= 0.3 then
+                        finishReason = if floorCount >= MAX_BOUNCES then "floor-limit-complete" else "settled-before-limit"
+                        break
+                    end
                 else
                     settledFor = 0
                 end
             end
-            previousVelocity = root.AssemblyLinearVelocity
+            if now >= nextStatusAt then
+                print(string.format("[SelfLaunch] Status: floor=%d wall=%d nearGround=%s armed=%s vertical=%.1f",
+                    floorCount, wallCount, tostring(nearGround), tostring(floorArmed), velocity.Y))
+                nextStatusAt = now + 2
+            end
         end
+        if not isCurrent() then finishReason = "character-changed-or-dead" end
+        print(string.format("[SelfLaunch] End: %s; floor=%d/%d wall=%d",
+            finishReason, floorCount, MAX_BOUNCES, wallCount))
     end, function(message)
         return tostring(message)
     end)
