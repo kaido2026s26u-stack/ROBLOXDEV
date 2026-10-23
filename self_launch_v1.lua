@@ -1,7 +1,7 @@
 -- Self-launch v1: run once on the local client. No files or shared globals.
 -- Wait until this run finishes before executing it again.
 do
-    print("[SelfLaunch] Loaded revision 4")
+    print("[SelfLaunch] Loaded revision 5")
     local BACK_SPEED = 70       -- Added backward speed (studs/second)
     local UP_SPEED = 80         -- Added upward speed (studs/second)
     local SPEED_VARIATION = 0.10 -- +/-10% for horizontal and upward speeds
@@ -9,6 +9,10 @@ do
     local SPIN_STRENGTH = 6     -- Angular impulse per unit mass; tune gently
     local MAX_SECONDS = 4
     local LAUNCH_DELAY = 3      -- Wait before changing character control
+    local FORWARD_DISTANCE = 12 -- Scripted approach distance in studs
+    local FORWARD_SECONDS = 0.8
+    local LIFT_HEIGHT = 4       -- Scripted lift before the physical launch
+    local LIFT_SECONDS = 0.4
 
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
@@ -41,7 +45,7 @@ do
     end
 
     local ok, err = xpcall(function()
-        print("[SelfLaunch] Launching in 3 seconds.")
+        print("[SelfLaunch] Starting approach in 3 seconds.")
         task.wait(LAUNCH_DELAY)
         if not isCurrent() then
             print("[SelfLaunch] Cancelled: character changed or died.")
@@ -85,8 +89,39 @@ do
         changed = true
         humanoid.AutoRotate = false
         humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        RunService.Heartbeat:Wait()
+        -- Tween-like smoothstep interpolation. No anchors, constraints or Tween objects.
+        -- Each phase eases to zero speed before the next phase / physical impulse.
+        local function movePhase(offset, duration)
+            local startCFrame = root.CFrame
+            local elapsed = 0
+            while elapsed < duration do
+                local dt = RunService.Heartbeat:Wait()
+                if not isCurrent() or root.Anchored or humanoid.Sit or humanoid.PlatformStand then
+                    return false
+                end
+                elapsed = math.min(elapsed + dt, duration)
+                local alpha = elapsed / duration
+                local eased = alpha * alpha * (3 - 2 * alpha)
+                local rate = 6 * alpha * (1 - alpha) / duration
+                root.CFrame = startCFrame + offset * eased
+                root.AssemblyLinearVelocity = offset * rate
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+            return true
+        end
+
+        print("[SelfLaunch] Approach: forward 12 studs, then up 4 studs.")
+        if not movePhase(forward * FORWARD_DISTANCE, FORWARD_SECONDS) then return end
+        if not movePhase(Vector3.yAxis * LIFT_HEIGHT, LIFT_SECONDS) then return end
         if not isCurrent() then return end
+
+        -- Recheck the physical assembly after the scripted movement.
+        assemblyRoot = root.AssemblyRootPart
+        local launchMass = root.AssemblyMass
+        if root.Anchored or (assemblyRoot and assemblyRoot.Anchored)
+            or launchMass <= 0 or launchMass == math.huge then return end
+        spinImpulse = spinImpulse * (launchMass / mass)
+        mass = launchMass
 
         print(string.format("[SelfLaunch] Launch: horizontal %.1f, up %.1f, angle %.1f deg",
             horizontalSpeed, upwardSpeed, math.deg(angle)))
