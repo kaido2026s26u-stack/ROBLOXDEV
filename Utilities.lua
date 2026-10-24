@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r10. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r11. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -170,7 +170,7 @@ do
     local anti
     local fast
     local fastLoading, fastError, fastLoadToken = false, nil, 0
-    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/dec2e589d9996ddc71e5cfdbe5eb7192e36b5e20/FastMode.lua"
+    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/88b30f82b3ece1c5c8445ee5b9dc306a43a57399/FastMode.lua"
     local consoleOpen = false
     local initialConsole = false
     pcall(function() initialConsole = StarterGui:GetCore("DevConsoleVisible") == true end)
@@ -186,7 +186,7 @@ do
     host.Parent = gui
     local panel = Instance.new("Frame")
     panel.Name = "Panel"
-    panel.Size = UDim2.fromOffset(300, 308)
+    panel.Size = UDim2.fromOffset(300, 344)
     panel.Position = UDim2.fromOffset(20, 160)
     panel.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
     panel.BorderSizePixel = 0
@@ -195,7 +195,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r10  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r11  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -217,7 +217,7 @@ do
     local antiButton = button("AntiAFKButton", "AntiAFK: ON", 34)
     local consoleButton = button("ConsoleButton", "CONSOLE OPEN", 78)
     local fastButton = button("FastModeButton", "FASTMODE: OFF", 122)
-    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 262)
+    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 298)
     allButton.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
     local status = Instance.new("TextLabel")
     status.Name = "DebugStatus"
@@ -229,6 +229,29 @@ do
     status.Font = Enum.Font.Code
     status.TextWrapped = true
     status.Parent = panel
+    local performance = Instance.new("TextLabel")
+    performance.Name = "PerformanceLabel"
+    performance.Size = UDim2.new(1, -16, 0, 22)
+    performance.Position = UDim2.fromOffset(8, 258)
+    performance.BackgroundTransparency = 1
+    performance.TextColor3 = Color3.fromRGB(210, 220, 235)
+    performance.Font = Enum.Font.Code
+    performance.TextSize = 12
+    performance.Text = "FPS -- | Frame -- ms"
+    performance.Parent = panel
+    local gauge = Instance.new("Frame")
+    gauge.Name = "PerformanceGauge"
+    gauge.Size = UDim2.new(1, -16, 0, 5)
+    gauge.Position = UDim2.fromOffset(8, 284)
+    gauge.BackgroundColor3 = Color3.fromRGB(55, 60, 72)
+    gauge.BorderSizePixel = 0
+    gauge.Parent = panel
+    local fill = Instance.new("Frame")
+    fill.Name = "Fill"
+    fill.Size = UDim2.fromScale(0, 1)
+    fill.BackgroundColor3 = Color3.fromRGB(80, 200, 130)
+    fill.BorderSizePixel = 0
+    fill.Parent = gauge
     local function connect(signal, fn)
         local connection = signal:Connect(fn)
         table.insert(connections, connection)
@@ -261,7 +284,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r10] Stopped. AntiAFK key released.")
+        warn("[Utilities r11] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -270,7 +293,7 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r10] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r11] Console OPEN failed: " .. tostring(err)) end
     end)
     connect(fastButton.Activated, function()
         if fastLoading then
@@ -293,14 +316,14 @@ do
         task.spawn(function()
             local loaded, err = pcall(function()
                 if not fast then
-                    warn("[Utilities r10] Loading child FastMode module...")
+                    warn("[Utilities r11] Loading child FastMode module...")
                     local code = game:HttpGet(FAST_URL)
                     if not alive or request ~= fastLoadToken then return end
                     local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
                     assert(chunk, compileErr)
                     local controller = chunk()
                     assert(type(controller) == "table", "Invalid FastMode module")
-                    for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super", "ultra"}) do
+                    for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super", "ultra", "busy"}) do
                         assert(type(controller[method]) == "function", "Missing FastMode." .. method)
                     end
                     if not alive or request ~= fastLoadToken then return end
@@ -313,7 +336,7 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r10] FASTMODE failed: " .. fastError)
+                warn("[Utilities r11] FASTMODE failed: " .. fastError)
             end
             refresh()
         end)
@@ -343,6 +366,41 @@ do
         pointer = nil
         place(Vector2.new(panel.Position.X.Offset, panel.Position.Y.Offset))
     end)
+    local sampleCount, sampleSeconds = 0, 0
+    local meterStage, readyAt, nextMeterUI = nil, 0, 0
+    connect(RunService.RenderStepped, function(dt)
+        if not alive then return end
+        local now = os.clock()
+        local stage = fastLoading and -1 or fast and fast.level() or 0
+        local applying = fastLoading or (fast and fast.busy())
+        if stage ~= meterStage or applying then
+            meterStage = stage
+            sampleCount, sampleSeconds = 0, 0
+            readyAt = now + 1
+        end
+        if now >= readyAt and dt > 0 and dt < math.huge then
+            sampleCount += 1
+            sampleSeconds += dt
+        end
+        if now < nextMeterUI then return end
+        nextMeterUI = now + 0.5
+        local text
+        if applying or now < readyAt then
+            text = "FPS -- | Frame -- ms (settling)"
+            fill.Size = UDim2.fromScale(0, 1)
+        elseif sampleSeconds >= 0.5 and sampleCount > 0 then
+            local fps = sampleCount / sampleSeconds
+            local ms = sampleSeconds * 1000 / sampleCount
+            text = string.format("FPS %.1f | Frame %.1fms", fps, ms)
+            fill.Size = UDim2.fromScale(math.clamp(ms / 50, 0, 1), 1)
+            fill.BackgroundColor3 = if ms <= 16.8 then Color3.fromRGB(80, 200, 130)
+                elseif ms <= 33.4 then Color3.fromRGB(240, 185, 70) else Color3.fromRGB(230, 90, 90)
+            sampleCount, sampleSeconds = 0, 0
+        else
+            return
+        end
+        if performance.Text ~= text then performance.Text = text end
+    end)
     local nextRefresh = 0
     connect(RunService.Heartbeat, function()
         if os.clock() >= nextRefresh then nextRefresh = os.clock() + 0.25;refresh() end
@@ -352,7 +410,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r10] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r11] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r10] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r11] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
