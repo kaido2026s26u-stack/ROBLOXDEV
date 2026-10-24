@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r14. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r15. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -200,7 +200,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r14  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r15  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -290,8 +290,8 @@ do
         local extremeOK, extremeWhy = pcall(function() if extreme then extreme.stop() end end)
         fastError = not fastOK and tostring(fastWhy) or nil
         extremeError = not extremeOK and tostring(extremeWhy) or nil
-        if fastError then warn("[Utilities r14] FAST restore failed: " .. fastError) end
-        if extremeError then warn("[Utilities r14] EXTREME restore failed: " .. extremeError) end
+        if fastError then warn("[Utilities r15] FAST restore failed: " .. fastError) end
+        if extremeError then warn("[Utilities r15] EXTREME restore failed: " .. extremeError) end
     end
     local function cleanup()
         if not alive then return end
@@ -307,7 +307,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r14] Stopped. AntiAFK key released.")
+        warn("[Utilities r15] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -316,8 +316,22 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r14] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r15] Console OPEN failed: " .. tostring(err)) end
     end)
+    local function loadFast(valid)
+        if fast then return end
+        warn("[Utilities r15] Loading child FastMode module...")
+        local code = game:HttpGet(FAST_URL)
+        if not valid() then return end
+        local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
+        assert(chunk, compileErr)
+        local controller = chunk()
+        assert(type(controller) == "table", "Invalid FastMode module")
+        for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super", "ultra", "busy"}) do
+            assert(type(controller[method]) == "function", "Missing FastMode." .. method)
+        end
+        if valid() then fast = controller end
+    end
     connect(fastButton.Activated, function()
         if fastLoading then
             fastTarget = (fastTarget + 1) % 5
@@ -340,20 +354,7 @@ do
         refresh()
         task.spawn(function()
             local loaded, err = pcall(function()
-                if not fast then
-                    warn("[Utilities r14] Loading child FastMode module...")
-                    local code = game:HttpGet(FAST_URL)
-                    if not alive or request ~= fastLoadToken then return end
-                    local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
-                    assert(chunk, compileErr)
-                    local controller = chunk()
-                    assert(type(controller) == "table", "Invalid FastMode module")
-                    for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super", "ultra", "busy"}) do
-                        assert(type(controller[method]) == "function", "Missing FastMode." .. method)
-                    end
-                    if not alive or request ~= fastLoadToken then return end
-                    fast = controller
-                end
+                loadFast(function() return alive and request == fastLoadToken end)
                 if alive and request == fastLoadToken then
                     fast.start()
                     if fastTarget >= 2 then fast.advance() end
@@ -366,7 +367,7 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r14] FASTMODE failed: " .. fastError)
+                warn("[Utilities r15] FASTMODE failed: " .. fastError)
             end
             refresh()
         end)
@@ -382,9 +383,21 @@ do
         extremeToken+=1
         local request=extremeToken
         extremeLoading,extremeError=true,nil
+        -- Extreme includes all four normal stages; supersede any older FAST request.
+        fastLoadToken += 1
+        local fastRequest = fastLoadToken
+        fastLoading,fastError,fastTarget = true,nil,4
         refresh()
         task.spawn(function()
+            local function valid()
+                return alive and request == extremeToken and fastRequest == fastLoadToken
+            end
             local ok,err=pcall(function()
+                loadFast(valid)
+                if not valid() then return end
+                fast.start();fast.advance();fast.super();fast.ultra()
+                fastLoading = false
+                refresh()
                 if not extreme then
                     local code=game:HttpGet(EXTREME_URL)
                     if not alive or request~=extremeToken then return end
@@ -403,8 +416,8 @@ do
             if not alive or request~=extremeToken then return end
             extremeLoading=false
             if not ok then
-                if extreme then pcall(extreme.stop) end
-                extremeError=tostring(err);warn("[Utilities r14] EXTREME failed: "..extremeError)
+                stopGraphics()
+                extremeError=tostring(err);warn("[Utilities r15] EXTREME failed: "..extremeError)
             end
             refresh()
         end)
@@ -455,7 +468,7 @@ do
             end
             if not reported[index] then
                 reported[index]=true
-                warn(string.format("[Utilities r14] Metric %s: %s",property,
+                warn(string.format("[Utilities r15] Metric %s: %s",property,
                     valid and tostring(value) or "N/A (not available/invalid)"))
             end
         end
@@ -517,7 +530,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r14] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r15] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r14] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r15] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
