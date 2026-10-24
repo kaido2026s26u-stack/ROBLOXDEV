@@ -1,7 +1,8 @@
--- Experimental native text-input switch. No keyboard injection or focus changes.
+-- Continuous ShowNativeInput=false enforcement until STOP. No focus or text changes.
 do
     local Players = game:GetService("Players")
     local UserInputService = game:GetService("UserInputService")
+    local RunService = game:GetService("RunService")
     local player = Players.LocalPlayer
     if not player then return end
     local playerGui = player:WaitForChild("PlayerGui", 10)
@@ -12,11 +13,14 @@ do
     local running = true
     local connections = {}
     local originals = {}
+    local boxConnections = {}
+    local applying = {}
+    local failureReported = setmetatable({}, {__mode = "k"})
     local controlGui, statusLabel
-    local applied, failed = 0, 0
+    local applied, failed, reasserted = 0, 0, 0
     local function refresh()
         if statusLabel then
-            statusLabel.Text = string.format("ShowNativeInput = false\nTextBoxes %d / Failed %d\nRefocus a text box to test", applied, failed)
+            statusLabel.Text = string.format("CONTINUOUS: native input OFF\nTextBoxes %d / Failed %d\nReasserted %d", applied, failed, reasserted)
         end
     end
     local function stop(reason)
@@ -24,6 +28,11 @@ do
         running = false
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
+        for _, items in pairs(boxConnections) do
+            for _, connection in ipairs(items) do connection:Disconnect() end
+        end
+        table.clear(boxConnections)
+        table.clear(applying)
         local restored = 0
         for box, original in pairs(originals) do
             pcall(function()
@@ -39,7 +48,7 @@ do
             controlGui = nil
             gui:Destroy()
         end
-        warn(string.format("[NativeInputTest r1] Stopped: %s; restored=%d", tostring(reason), restored))
+        warn(string.format("[NativeInputTest r2] Stopped: %s; restored=%d", tostring(reason), restored))
     end
     local function connect(signal, callback)
         local connection = signal:Connect(callback)
@@ -75,7 +84,7 @@ do
         handle.Name = "DragHandle"
         handle.Size = UDim2.new(1, 0, 0, 28)
         handle.BackgroundTransparency = 1
-        handle.Text = "TEXT INPUT TEST  -  drag"
+        handle.Text = "TEXT INPUT r2: FORCE OFF"
         handle.TextColor3 = Color3.fromRGB(210, 220, 235)
         handle.Font = Enum.Font.GothamBold
         handle.TextSize = 12
@@ -152,39 +161,78 @@ do
 
     local ok, err = xpcall(function()
         makeControl()
-        local function apply(box)
-            if not running or not box:IsA("TextBox") then return end
+        local apply
+        local function forget(box)
+            local items = boxConnections[box]
+            if items then for _, connection in ipairs(items) do connection:Disconnect() end end
+            boxConnections[box], originals[box], applying[box], failureReported[box] = nil, nil, nil, nil
+        end
+        apply = function(box)
+            if not running or applying[box] or not box:IsA("TextBox") then return end
+            applying[box] = true
             local worked, applyErr = pcall(function()
                 if originals[box] == nil then
                     originals[box] = box.ShowNativeInput
                     applied += 1
+                    boxConnections[box] = {
+                        box:GetPropertyChangedSignal("ShowNativeInput"):Connect(function() apply(box) end),
+                        box.Destroying:Connect(function() forget(box) end),
+                    }
                 end
-                box.ShowNativeInput = false
+                if box.ShowNativeInput ~= false then
+                    box.ShowNativeInput = false
+                    reasserted += 1
+                end
             end)
-            if not worked then
+            applying[box] = nil
+            if not worked and not failureReported[box] then
+                failureReported[box] = true
                 failed += 1
-                warn("[NativeInputTest r1] Cannot apply: " .. tostring(applyErr))
+                warn("[NativeInputTest r2] Cannot enforce: " .. tostring(applyErr))
             end
-            refresh()
             return worked
+        end
+        local roots = {}
+        local function scan(root)
+            return pcall(function()
+                for _, object in ipairs(root:GetDescendants()) do apply(object) end
+            end)
         end
         local function watch(root, label)
             local watched, watchErr = pcall(function()
                 connect(root.DescendantAdded, apply)
-                for _, object in ipairs(root:GetDescendants()) do apply(object) end
+                roots[#roots + 1] = root
             end)
-            warn(string.format("[NativeInputTest r1] %s: %s", label, watched and "scanned" or tostring(watchErr)))
+            if watched then watched, watchErr = scan(root) end
+            warn(string.format("[NativeInputTest r2] %s: %s", label, watched and "watched" or tostring(watchErr)))
         end
         watch(playerGui, "PlayerGui")
+        watch(workspace, "Workspace/SurfaceGui")
         local accessible, coreGui = pcall(function() return game:GetService("CoreGui") end)
         if accessible and coreGui then watch(coreGui, "CoreGui/chat")
-        else warn("[NativeInputTest r1] CoreGui unavailable: " .. tostring(coreGui)) end
+        else warn("[NativeInputTest r2] CoreGui unavailable: " .. tostring(coreGui)) end
         connect(UserInputService.TextBoxFocused, function(box)
-            local worked = apply(box)
-            warn("[NativeInputTest r1] Focused TextBox: " .. tostring(box.Name) .. "; applied=" .. tostring(worked))
+            apply(box)
+        end)
+        local nextScan, nextUI = os.clock() + 0.5, 0
+        connect(RunService.RenderStepped, function()
+            if not running then return end
+            -- Property events handle normal writes immediately. Each frame also
+            -- rechecks tracked fields and the focused field without dropping focus.
+            for box in pairs(originals) do apply(box) end
+            pcall(function()
+                local box = UserInputService:GetFocusedTextBox()
+                if box then apply(box) end
+            end)
+            local now = os.clock()
+            if now >= nextScan then
+                nextScan = now + 0.5
+                for _, root in ipairs(roots) do scan(root) end
+            end
+            if now >= nextUI then nextUI = now + 0.25; refresh() end
         end)
         refresh()
-        warn("[NativeInputTest r1] Ready. Close and refocus an input field; STOP restores previous settings.")
+        warn("[NativeInputTest r2] Continuous enforcement ON: property change + focus + every frame + 0.5s scan. STOP restores settings.")
     end, function(message) return tostring(message) end)
-    if not ok then warn("[NativeInputTest r1] " .. err); stop("error") end
+    if not ok then warn("[NativeInputTest r2] " .. err); stop("error") end
 end
