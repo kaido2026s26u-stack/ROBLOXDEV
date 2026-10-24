@@ -1,5 +1,5 @@
--- Standalone AutoChat v0.1.1. RXDEV itself is unchanged.
-local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/5dc6b40d1fc276fb05e31bc9781fec03c53e9204/autochat/v0.1.1/"
+-- Standalone AutoChat v0.1.2. RXDEV itself is unchanged.
+local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/73e3c13469069432de48b081c9649e428751c3e5/autochat/v0.1.2/"
 local specs={Engine={"new","parse","validate"},RobloxChat={"discover","availability","send"},App={"mount"},Diagnostics={"new"}}
 local cache={}
 local function get(name)
