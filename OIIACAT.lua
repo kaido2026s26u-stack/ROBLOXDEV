@@ -1,6 +1,6 @@
 -- Physics OIIACAT: fixed 2s spin / 1.5s back-facing pause, WASD hover movement.
 do
-    print("[OIIACAT] Loaded revision 3")
+    print("[OIIACAT] Loaded revision 4")
     local LAUNCH_DELAY = 3
     local SPIN_RPS = 5
     local CONTINUOUS_SPIN_RPS = 4
@@ -301,8 +301,8 @@ do
             camera = camera, kind = camera.CameraType, subject = camera.CameraSubject,
             cframe = camera.CFrame, focus = camera.Focus,
         }
-        -- Only the camera subject is fixed. Roblox's normal camera controller
-        -- owns orbit, zoom, CFrame and Focus throughout the dance.
+        -- A separate subject filters dance rotation/bobbing. Its base follows the
+        -- supporting platform; Roblox still owns orbit, zoom, CFrame and Focus.
         local cameraTarget = Instance.new("Part")
         table.insert(temporaryInstances, cameraTarget)
         cameraTarget.Name = "ROBLOXDEV_OIIACameraTarget"
@@ -379,6 +379,30 @@ do
         upright.Responsiveness = 80
         upright.Parent = root
         local center = origin
+        local supportPart, supportCFrame
+        local supportParams = RaycastParams.new()
+        supportParams.FilterType = Enum.RaycastFilterType.Exclude
+        supportParams.FilterDescendantsInstances = {character, cameraTarget}
+        supportParams.RespectCanCollide = true
+        local supportRange = HOVER_HEIGHT + HOVER_AMPLITUDE + humanoid.HipHeight + root.Size.Y * 0.5 + 6
+        local function updateSupport()
+            -- Carry the hover base by the platform transform, including rotation.
+            -- This does not use the spinning/bobbing body's orientation or height.
+            if supportPart and supportPart:IsDescendantOf(workspace) then
+                local current = supportPart.CFrame
+                center = current:PointToWorldSpace(supportCFrame:PointToObjectSpace(center))
+            end
+            local hit = workspace:Raycast(root.Position + Vector3.yAxis,
+                -Vector3.yAxis * supportRange, supportParams)
+            local part = hit and hit.Instance
+            if part and part:IsA("BasePart") and not part:IsA("Terrain")
+                and part.CanCollide and hit.Normal.Y > 0.25 then
+                supportPart, supportCFrame = part, part.CFrame
+            else
+                -- Reacquisition starts from the current transform: no catch-up jump.
+                supportPart, supportCFrame = nil, nil
+            end
+        end
         local stareRotation = CFrame.lookAt(Vector3.zero, lastForward)
         local cycleSeconds = SPIN_SECONDS + STARE_SECONDS
         local started = os.clock()
@@ -399,6 +423,7 @@ do
             local rps = if continuousMode then CONTINUOUS_SPIN_RPS else SPIN_RPS
             spin.AngularVelocity = Vector3.yAxis * (2 * math.pi * rps)
             if cycle ~= lastCycle then lastCycle, wasStaring = cycle, false end
+            updateSupport()
             local direction = getMoveDirection()
             center += direction * MOVE_SPEED * step
             local position = center + Vector3.yAxis * HOVER_HEIGHT
@@ -436,8 +461,9 @@ do
             local changeY = (targetY - velocity.Y) * (1 - math.exp(-18 * step)) + workspace.Gravity * step
             changeY = math.clamp(changeY, -MAX_VERTICAL_ACCEL * step, MAX_VERTICAL_ACCEL * step)
             if step > 0 then root:ApplyImpulse((change + Vector3.yAxis * changeY) * currentMass) end
-            -- The observation point follows horizontal travel, never body rotation or bobbing.
-            cameraTarget.CFrame = CFrame.new(root.Position.X, origin.Y + HOVER_HEIGHT, root.Position.Z)
+            -- Follow actual horizontal travel and the platform-relative base height.
+            -- The sine-wave hover offset and body rotation never enter this target.
+            cameraTarget.CFrame = CFrame.new(root.Position.X, center.Y + HOVER_HEIGHT, root.Position.Z)
         end
         updateControl(0)
         while running and isCurrent() do
