@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r12. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r13. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -169,6 +169,9 @@ do
     local alive = true
     local anti
     local fast
+    local extreme
+    local extremeLoading, extremeError, extremeToken = false, nil, 0
+    local EXTREME_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/496e47175f85cb86da2e82b87735c983e5fa8f06/ExtremelyFastMode.lua"
     local fastLoading, fastError, fastLoadToken = false, nil, 0
     local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/88b30f82b3ece1c5c8445ee5b9dc306a43a57399/FastMode.lua"
     local consoleOpen = false
@@ -186,7 +189,7 @@ do
     host.Parent = gui
     local panel = Instance.new("Frame")
     panel.Name = "Panel"
-    panel.Size = UDim2.fromOffset(300, 380)
+    panel.Size = UDim2.fromOffset(300, 448)
     panel.Position = UDim2.fromOffset(20, 160)
     panel.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
     panel.BorderSizePixel = 0
@@ -195,7 +198,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r12  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r13  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -217,12 +220,15 @@ do
     local antiButton = button("AntiAFKButton", "AntiAFK: ON", 34)
     local consoleButton = button("ConsoleButton", "CONSOLE OPEN", 78)
     local fastButton = button("FastModeButton", "FASTMODE: OFF", 122)
-    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 334)
+    local extremeButton = button("ExtremeButton", "ExtremelyFastMode: OFF", 166)
+    extremeButton.BackgroundColor3 = Color3.fromRGB(235, 190, 45)
+    extremeButton.TextColor3 = Color3.fromRGB(25, 25, 25)
+    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 402)
     allButton.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
     local status = Instance.new("TextLabel")
     status.Name = "DebugStatus"
-    status.Size = UDim2.new(1, -16, 0, 90)
-    status.Position = UDim2.fromOffset(8, 166)
+    status.Size = UDim2.new(1, -16, 0, 114)
+    status.Position = UDim2.fromOffset(8, 210)
     status.BackgroundTransparency = 1
     status.TextColor3 = Color3.fromRGB(210, 220, 235)
     status.TextSize = 12
@@ -232,7 +238,7 @@ do
     local performance = Instance.new("TextLabel")
     performance.Name = "PerformanceLabel"
     performance.Size = UDim2.new(1, -16, 0, 56)
-    performance.Position = UDim2.fromOffset(8, 258)
+    performance.Position = UDim2.fromOffset(8, 326)
     performance.BackgroundTransparency = 1
     performance.TextColor3 = Color3.fromRGB(210, 220, 235)
     performance.Font = Enum.Font.Code
@@ -242,7 +248,7 @@ do
     local gauge = Instance.new("Frame")
     gauge.Name = "PerformanceGauge"
     gauge.Size = UDim2.new(1, -16, 0, 5)
-    gauge.Position = UDim2.fromOffset(8, 320)
+    gauge.Position = UDim2.fromOffset(8, 388)
     gauge.BackgroundColor3 = Color3.fromRGB(55, 60, 72)
     gauge.BorderSizePixel = 0
     gauge.Parent = panel
@@ -269,12 +275,16 @@ do
         elseif fast and fast.level() == 4 then fastButton.Text = "UltraFastMode: ON / ALL OFF"
         else fastButton.Text = "FASTMODE: OFF" end
         local fastStatus = fastLoading and "Fetching child module..." or fastError and ("FAST ERROR: " .. fastError) or fast and fast.status() or "FAST OFF (not loaded)"
-        local text = (anti and anti.status() or "AntiAFK stopped") .. "\n" .. fastStatus
+        extremeButton.Text = "ExtremelyFastMode: " .. (extremeLoading and "LOADING/CANCEL" or extremeError and "ERROR/RETRY" or extreme and extreme.active() and "ON" or "OFF")
+        local extremeStatus = extremeLoading and "Extreme loading..." or extremeError and ("EXTREME ERROR: " .. extremeError) or extreme and extreme.status() or "EXTREME OFF"
+        local text = (anti and anti.status() or "AntiAFK stopped") .. "\n" .. fastStatus .. "\n" .. extremeStatus
         if status.Text ~= text then status.Text = text end
     end
     local function cleanup()
         if not alive then return end
         alive = false
+        extremeToken += 1;extremeLoading = false
+        if extreme then pcall(extreme.stop);extreme = nil end
         fastLoadToken += 1
         fastLoading = false
         if fast then pcall(fast.stop);fast = nil end
@@ -284,7 +294,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r12] Stopped. AntiAFK key released.")
+        warn("[Utilities r13] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -293,7 +303,7 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r12] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r13] Console OPEN failed: " .. tostring(err)) end
     end)
     connect(fastButton.Activated, function()
         if fastLoading then
@@ -316,7 +326,7 @@ do
         task.spawn(function()
             local loaded, err = pcall(function()
                 if not fast then
-                    warn("[Utilities r12] Loading child FastMode module...")
+                    warn("[Utilities r13] Loading child FastMode module...")
                     local code = game:HttpGet(FAST_URL)
                     if not alive or request ~= fastLoadToken then return end
                     local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
@@ -336,7 +346,46 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r12] FASTMODE failed: " .. fastError)
+                warn("[Utilities r13] FASTMODE failed: " .. fastError)
+            end
+            refresh()
+        end)
+    end)
+    connect(extremeButton.Activated, function()
+        if extremeLoading then
+            extremeToken+=1;extremeLoading=false;extremeError=nil;refresh();return
+        end
+        if extreme and extreme.active() then
+            local ok,err=pcall(extreme.stop)
+            if ok then extremeError=nil else extremeError=tostring(err) end
+            refresh();return
+        end
+        extremeToken+=1
+        local request=extremeToken
+        extremeLoading,extremeError=true,nil
+        refresh()
+        task.spawn(function()
+            local ok,err=pcall(function()
+                if not extreme then
+                    local code=game:HttpGet(EXTREME_URL)
+                    if not alive or request~=extremeToken then return end
+                    local chunk,why=loadstring(code,"ROBLOXDEV_Extreme")
+                    assert(chunk,why)
+                    local controller=chunk()
+                    assert(type(controller)=="table","Invalid Extreme module")
+                    for _,method in ipairs({"start","stop","active","busy","status"}) do
+                        assert(type(controller[method])=="function","Missing Extreme."..method)
+                    end
+                    if not alive or request~=extremeToken then return end
+                    extreme=controller
+                end
+                if alive and request==extremeToken then extreme.start() end
+            end)
+            if not alive or request~=extremeToken then return end
+            extremeLoading=false
+            if not ok then
+                if extreme then pcall(extreme.stop) end
+                extremeError=tostring(err);warn("[Utilities r13] EXTREME failed: "..extremeError)
             end
             refresh()
         end)
@@ -387,7 +436,7 @@ do
             end
             if not reported[index] then
                 reported[index]=true
-                warn(string.format("[Utilities r12] Metric %s: %s",property,
+                warn(string.format("[Utilities r13] Metric %s: %s",property,
                     valid and tostring(value) or "N/A (not available/invalid)"))
             end
         end
@@ -401,8 +450,8 @@ do
     connect(RunService.RenderStepped, function(dt)
         if not alive then return end
         local now = os.clock()
-        local stage = fastLoading and -1 or fast and fast.level() or 0
-        local applying = fastLoading or (fast and fast.busy())
+        local stage = (fastLoading and -1 or fast and fast.level() or 0) + (extremeLoading and 100 or extreme and extreme.active() and 10 or 0)
+        local applying = fastLoading or (fast and fast.busy()) or extremeLoading or (extreme and extreme.busy())
         if stage ~= meterStage or applying then
             meterStage = stage
             clearSamples()
@@ -449,7 +498,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r12] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r13] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r12] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r13] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
