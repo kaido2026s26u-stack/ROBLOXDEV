@@ -1,10 +1,18 @@
-# AutoChat v0.1.5 — standalone prototype
+# AutoChat v0.1.6 — standalone prototype
 
 最大20フレーズを登録し、設定した秒数範囲から毎回待ち時間を抽選して送信します。送信先は取得可能なTextChannelから複数選択できます。RXDEVへの統合前の単体版です。
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/main/AutoChat.lua"))()
 ```
+
+## 送信ルート比較（v0.1.6）
+
+「現在の入力先へ送信」はクリック時のChatInputBarConfiguration.TargetTextChannelへ、「RBXGeneralへ送信」はTextChannels.RBXGeneralへ、識別文を1回だけSendAsyncします。前者も通常のTextChannel APIを使うもので、標準UIのクリック・Enter操作を再現するものではありません。候補は今回実際に発見したRBXGeneralに限定します。
+
+Hereを選んだ状態、Globalを選んだ状態でそれぞれ2ボタンを試し、どちらのタブ／サブ側に文が現れるかを比較します。文は `AutoChat test A/B <時刻>_<連番>` です。APIの返答だけでは配信成功としません。両経路が同じInstanceならsameTarget=true、現在の入力先がnilなら代替送信せずnot-sentを記録します。標準UIの選択タブ自体はこの調査では取得できません。
+
+各クリックの条件・送信先・識別文・結果はwarnのOutputとreports内のTXT/JSONへ保存します。起動時の自動送信・再試行はありません。送信中の連打は受け付けず、15秒で返らない場合はtimeoutを保存します。呼び出し自体は取り消せないため、返答があるまでは追加テストを受け付けません。遅い返答はOutputへ記録され、保存済みtimeoutレポートは書き換えません。比較中は通常AutoChatをSTOPにしておくと識別しやすくなります。
 
 ## 専用workspaceフォルダ（v0.1.5）
 
