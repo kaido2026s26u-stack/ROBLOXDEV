@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r1. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r2. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -161,147 +161,116 @@ end
 -- Continuous TextEditable=false enforcement until STOP. No focus or text changes.
 local function startInputLock()
     local Players = game:GetService("Players")
-    local UserInputService = game:GetService("UserInputService")
+    local UIS = game:GetService("UserInputService")
     local RunService = game:GetService("RunService")
     local player = Players.LocalPlayer
-    if not player then return end
-    local playerGui = player:WaitForChild("PlayerGui", 10)
+    local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
     if not playerGui then return end
     local running = true
-    local connections = {}
-    local originals = {}
-    local originalClear = {}
-    local boxConnections = {}
-    local applying = {}
-    local failureReported = setmetatable({}, {__mode = "k"})
-    local controlGui
-    local statusLabel = {Text = "Starting"}
-    local applied, failed, reasserted = 0, 0, 0
-    local function refresh()
-        if statusLabel then
-            statusLabel.Text = string.format("PROGRAM ONLY: user editing OFF\nTextBoxes %d / Failed %d\nReasserted %d", applied, failed, reasserted)
-        end
+    local connections, records, roots = {}, {}, {}
+    local locked, failures = 0, 0
+    local fields = {"TextEditable", "ClearTextOnFocus", "ShowNativeInput", "Active", "Selectable", "Interactable"}
+    local function connect(signal, fn)
+        local c = signal:Connect(fn);table.insert(connections, c)
     end
     local function stop(reason)
         if not running then return end
         running = false
-        for _, connection in ipairs(connections) do connection:Disconnect() end
-        table.clear(connections)
-        for _, items in pairs(boxConnections) do
-            for _, connection in ipairs(items) do connection:Disconnect() end
-        end
-        table.clear(boxConnections)
-        table.clear(applying)
-        local restored = 0
-        for box, original in pairs(originals) do
-            pcall(function()
-                if box.Parent and box.TextEditable == false then
-                    box.TextEditable = original
-                    restored += 1
-                end
-            end)
-        end
-        for box, value in pairs(originalClear) do pcall(function() if box.Parent then box.ClearTextOnFocus = value end end) end
-        table.clear(originalClear)
-        table.clear(originals)
-        if controlGui then
-            local gui = controlGui
-            controlGui = nil
-            gui:Destroy()
-        end
-        warn(string.format("[ProgramOnlyInput r1] Stopped: %s; restored=%d", tostring(reason), restored))
-    end
-    local function connect(signal, callback)
-        local connection = signal:Connect(callback)
-        table.insert(connections, connection)
-        return connection
-    end
-    local function makeControl() end
-    local ok, err = xpcall(function()
-        makeControl()
-        local apply
-        local function forget(box)
-            originalClear[box] = nil
-            local items = boxConnections[box]
-            if items then for _, connection in ipairs(items) do connection:Disconnect() end end
-            boxConnections[box], originals[box], applying[box], failureReported[box] = nil, nil, nil, nil
-        end
-        apply = function(box)
-            if not running or applying[box] or not box:IsA("TextBox") then return end
-            applying[box] = true
-            local worked, applyErr = pcall(function()
-                if originals[box] == nil then
-                    originals[box] = box.TextEditable
-                    originalClear[box] = box.ClearTextOnFocus
-                    applied += 1
-                    boxConnections[box] = {
-                        box:GetPropertyChangedSignal("TextEditable"):Connect(function() apply(box) end),
-                        box:GetPropertyChangedSignal("ClearTextOnFocus"):Connect(function() apply(box) end),
-                        box.Destroying:Connect(function() forget(box) end),
-                    }
-                end
-                if box.ClearTextOnFocus then box.ClearTextOnFocus = false end
-                if box.TextEditable ~= false then
-                    box.TextEditable = false
-                    reasserted += 1
-                end
-            end)
-            applying[box] = nil
-            if not worked and not failureReported[box] then
-                failureReported[box] = true
-                failed += 1
-                warn("[ProgramOnlyInput r1] Cannot enforce: " .. tostring(applyErr))
+        for _, c in ipairs(connections) do c:Disconnect() end
+        for box, record in pairs(records) do
+            for _, c in ipairs(record.connections) do c:Disconnect() end
+            pcall(function() if record.shield then record.shield:Destroy() end end)
+            for key, original in pairs(record.originals) do
+                pcall(function() if box.Parent then box[key] = original end end)
             end
-            return worked
         end
-        local roots = {}
-        local function scan(root)
-            return pcall(function()
-                for _, object in ipairs(root:GetDescendants()) do apply(object) end
-            end)
+        table.clear(records);table.clear(connections)
+        warn("[InputLock r2] Stopped; properties and click access restored: " .. tostring(reason))
+    end
+    local apply
+    apply = function(box)
+        if not running or not box:IsA("TextBox") then return end
+        local record = records[box]
+        if not record then
+            record = {originals={},connections={},busy=false}
+            records[box] = record;locked += 1
+            for _, key in ipairs(fields) do
+                pcall(function()
+                    record.originals[key] = box[key]
+                    table.insert(record.connections, box:GetPropertyChangedSignal(key):Connect(function() apply(box) end))
+                end)
+            end
+            table.insert(record.connections, box.Destroying:Connect(function()
+                for _, c in ipairs(record.connections) do c:Disconnect() end
+                records[box] = nil
+            end))
+            table.insert(record.connections, box.Focused:Connect(function()
+                if not running or record.busy then return end
+                record.busy = true
+                pcall(function() box:ReleaseFocus(false) end)
+                record.busy = false
+            end))
         end
-        local function watch(root, label)
-            local watched, watchErr = pcall(function()
-                connect(root.DescendantAdded, apply)
-                roots[#roots + 1] = root
-            end)
-            if watched then watched, watchErr = scan(root) end
-            warn(string.format("[ProgramOnlyInput r1] %s: %s", label, watched and "watched" or tostring(watchErr)))
-        end
-        watch(playerGui, "PlayerGui")
-        watch(workspace, "Workspace/SurfaceGui")
-        local accessible, coreGui = pcall(function() return game:GetService("CoreGui") end)
-        if accessible and coreGui then watch(coreGui, "CoreGui/chat")
-        else warn("[ProgramOnlyInput r1] CoreGui unavailable: " .. tostring(coreGui)) end
-        connect(UserInputService.TextBoxFocused, function(box)
-            apply(box)
+        if record.busy then return end
+        record.busy = true
+        local ok, err = pcall(function()
+            for key in pairs(record.originals) do if box[key] ~= false then box[key] = false end end
+            if not record.shield or not record.shield.Parent then
+                local shield = Instance.new("TextButton")
+                record.shield = shield
+                shield.Name = "ROBLOXDEV_InputShield"
+                shield.Text = ""
+                shield.BackgroundTransparency = 1
+                shield.BorderSizePixel = 0
+                shield.AutoButtonColor = false
+                shield.Active = true
+                shield.Selectable = false
+                shield.Size = UDim2.fromScale(1, 1)
+                pcall(function() shield.InputSink = Enum.InputSink.All end)
+                shield.Parent = box
+            end
+            record.shield.ZIndex = box.ZIndex + 1
+            record.shield.Visible = true
+            if UIS:GetFocusedTextBox() == box then box:ReleaseFocus(false) end
         end)
-        local nextScan, nextUI = os.clock() + 0.5, 0
+        record.busy = false
+        if not ok and not record.warned then
+            record.warned = true;failures += 1
+            warn("[InputLock r2] Cannot fully lock " .. tostring(box.Name) .. ": " .. tostring(err))
+        end
+    end
+    local function scan(root)
+        pcall(function() for _, item in ipairs(root:GetDescendants()) do apply(item) end end)
+    end
+    local function watch(root)
+        roots[#roots+1] = root
+        connect(root.DescendantAdded, apply);scan(root)
+    end
+    local ok, err = pcall(function()
+        watch(playerGui);watch(workspace)
+        local found, core = pcall(function() return game:GetService("CoreGui") end)
+        if found and core then watch(core) else warn("[InputLock r2] CoreGui not accessible") end
+        connect(UIS.TextBoxFocused, function(box)
+            apply(box)
+            pcall(function() box:ReleaseFocus(false) end)
+        end)
+        local nextScan = 0
         connect(RunService.RenderStepped, function()
             if not running then return end
-            -- Property events handle normal writes immediately. Each frame also
-            -- rechecks tracked fields and the focused field without dropping focus.
-            for box in pairs(originals) do apply(box) end
-            pcall(function()
-                local box = UserInputService:GetFocusedTextBox()
-                if box then apply(box) end
-            end)
-            local now = os.clock()
-            if now >= nextScan then
-                nextScan = now + 0.5
+            for box in pairs(records) do apply(box) end
+            pcall(function() local box = UIS:GetFocusedTextBox();if box then apply(box) end end)
+            if os.clock() >= nextScan then
+                nextScan = os.clock() + 0.5
                 for _, root in ipairs(roots) do scan(root) end
             end
-            if now >= nextUI then nextUI = now + 0.25; refresh() end
         end)
-        refresh()
-        warn("[ProgramOnlyInput r1] Continuous enforcement ON: property change + focus + every frame + 0.5s scan. STOP restores settings.")
-    end, function(message) return tostring(message) end)
-    if not ok then warn("[ProgramOnlyInput r1] " .. err); stop("error") end
-    return {stop = stop, status = function() return statusLabel.Text end,
-        active = function() return running end}
-
+    end)
+    if not ok then warn("[InputLock r2] Startup: " .. tostring(err));stop("error") end
+    warn("[InputLock r2] User editing, click/touch access and focus blocked. Direct Lua Text assignment remains available.")
+    return {stop=stop,active=function() return running end,status=function()
+        return string.format("PROGRAM ONLY: click/focus/edit OFF\nTextBoxes %d / Failed %d",locked,failures)
+    end}
 end
-
 
 do
     local Players = game:GetService("Players")
@@ -344,7 +313,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r1  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r2  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -402,7 +371,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r1] All features stopped; input settings restored.")
+        warn("[Utilities r2] All features stopped; input settings restored.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -416,7 +385,7 @@ do
     connect(consoleButton.Activated, function()
         local target = not consoleOpen
         local ok, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", target) end)
-        if ok then consoleOpen = target else warn("[Utilities r1] Console: " .. tostring(err)) end
+        if ok then consoleOpen = target else warn("[Utilities r2] Console: " .. tostring(err)) end
         refresh()
     end)
     connect(allButton.Activated, function() gui:Destroy() end)
@@ -454,7 +423,7 @@ do
         anti = startAntiAFK()
         inputLock = startInputLock()
     end)
-    if not ok then warn("[Utilities r1] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r2] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r1] Ready. Independent toggles; STOP ALL restores and closes.")
+    warn("[Utilities r2] Ready. Independent toggles; STOP ALL restores and closes.")
 end
