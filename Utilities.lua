@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r5. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r6. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -168,6 +168,9 @@ do
     local connections = {}
     local alive = true
     local anti
+    local fast
+    local fastLoading, fastError, fastLoadToken = false, nil, 0
+    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/f2dd75a54ba71a8fda841b58ee3e782ba5e6c5d9/FastMode.lua"
     local consoleOpen = false
     local initialConsole = false
     pcall(function() initialConsole = StarterGui:GetCore("DevConsoleVisible") == true end)
@@ -183,7 +186,7 @@ do
     host.Parent = gui
     local panel = Instance.new("Frame")
     panel.Name = "Panel"
-    panel.Size = UDim2.fromOffset(300, 240)
+    panel.Size = UDim2.fromOffset(300, 308)
     panel.Position = UDim2.fromOffset(20, 160)
     panel.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
     panel.BorderSizePixel = 0
@@ -192,7 +195,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r5  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r6  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -213,12 +216,13 @@ do
     end
     local antiButton = button("AntiAFKButton", "AntiAFK: ON", 34)
     local consoleButton = button("ConsoleButton", "CONSOLE OPEN", 78)
-    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 194)
+    local fastButton = button("FastModeButton", "FASTMODE: OFF", 122)
+    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 262)
     allButton.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
     local status = Instance.new("TextLabel")
     status.Name = "DebugStatus"
-    status.Size = UDim2.new(1, -16, 0, 66)
-    status.Position = UDim2.fromOffset(8, 122)
+    status.Size = UDim2.new(1, -16, 0, 90)
+    status.Position = UDim2.fromOffset(8, 166)
     status.BackgroundTransparency = 1
     status.TextColor3 = Color3.fromRGB(210, 220, 235)
     status.TextSize = 12
@@ -234,19 +238,24 @@ do
     end
     local function refresh()
         antiButton.Text = "AntiAFK: " .. (anti and (anti.active() and "ON" or "ERROR") or "OFF")
-        local text = anti and anti.status() or "AntiAFK stopped"
+        fastButton.Text = "FASTMODE: " .. (fastLoading and "LOADING / CANCEL" or fastError and "ERROR / RETRY" or fast and fast.active() and "ON" or "OFF")
+        local fastStatus = fastLoading and "Fetching child module..." or fastError and ("FAST ERROR: " .. fastError) or fast and fast.status() or "FAST OFF (not loaded)"
+        local text = (anti and anti.status() or "AntiAFK stopped") .. "\n" .. fastStatus
         if status.Text ~= text then status.Text = text end
     end
     local function cleanup()
         if not alive then return end
         alive = false
+        fastLoadToken += 1
+        fastLoading = false
+        if fast then pcall(fast.stop);fast = nil end
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
         endFeature(anti);anti = nil
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r5] Stopped. AntiAFK key released.")
+        warn("[Utilities r6] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -255,7 +264,49 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r5] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r6] Console OPEN failed: " .. tostring(err)) end
+    end)
+    connect(fastButton.Activated, function()
+        if fastLoading then
+            fastLoadToken += 1;fastLoading = false;fastError = nil
+            refresh();return
+        end
+        if fast and fast.active() then
+            local stopped, err = pcall(fast.stop)
+            if stopped then fastError = nil else fastError = tostring(err) end
+            refresh();return
+        end
+        fastLoadToken += 1
+        local request = fastLoadToken
+        fastLoading, fastError = true, nil
+        refresh()
+        task.spawn(function()
+            local loaded, err = pcall(function()
+                if not fast then
+                    warn("[Utilities r6] Loading child FastMode module...")
+                    local code = game:HttpGet(FAST_URL)
+                    if not alive or request ~= fastLoadToken then return end
+                    local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
+                    assert(chunk, compileErr)
+                    local controller = chunk()
+                    assert(type(controller) == "table", "Invalid FastMode module")
+                    for _, method in ipairs({"start", "stop", "active", "status"}) do
+                        assert(type(controller[method]) == "function", "Missing FastMode." .. method)
+                    end
+                    if not alive or request ~= fastLoadToken then return end
+                    fast = controller
+                end
+                if alive and request == fastLoadToken then fast.start() end
+            end)
+            if not alive or request ~= fastLoadToken then return end
+            fastLoading = false
+            if not loaded then
+                if fast then pcall(fast.stop) end
+                fastError = tostring(err)
+                warn("[Utilities r6] FASTMODE failed: " .. fastError)
+            end
+            refresh()
+        end)
     end)
     connect(allButton.Activated, function() gui:Destroy() end)
     local pointer, origin, panelOrigin
@@ -291,7 +342,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r5] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r6] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r5] Ready. AntiAFK toggle + CONSOLE OPEN. STOP ALL closes.")
+    warn("[Utilities r6] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
