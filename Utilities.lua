@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r3. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r4. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -186,7 +186,7 @@ local function startInputLock()
             end
         end
         table.clear(records);table.clear(dirty);table.clear(connections)
-        warn("[InputLock r3] Stopped; properties and click access restored: " .. tostring(reason))
+        warn("[InputLock r4] Stopped; properties and click access restored: " .. tostring(reason))
     end
     local apply
     apply = function(box)
@@ -257,7 +257,7 @@ local function startInputLock()
         record.busy = false
         if not ok and not record.warned then
             record.warned = true;failures += 1
-            warn("[InputLock r3] Cannot fully lock " .. tostring(box.Name) .. ": " .. tostring(err))
+            warn("[InputLock r4] Cannot fully lock " .. tostring(box.Name) .. ": " .. tostring(err))
         end
     end
     local function scan(root)
@@ -272,21 +272,40 @@ local function startInputLock()
     local ok, err = pcall(function()
         watch(playerGui);watch(workspace)
         local found, core = pcall(function() return game:GetService("CoreGui") end)
-        if found and core then watch(core) else warn("[InputLock r3] CoreGui not accessible") end
+        if found and core then watch(core) else warn("[InputLock r4] CoreGui not accessible") end
         connect(UIS.TextBoxFocused, function(box)
             apply(box)
             pcall(function() box:ReleaseFocus(false) end)
         end)
-        -- Only changed fields/shields are rechecked. No idle polling or recurring world scan.
-        connect(RunService.Heartbeat, function()
-            if not running or next(dirty) == nil then return end
+        -- Events are the fast path. Poll only tracked fields as a safety net;
+        -- never repeatedly enumerate the game's Workspace.
+        local nextAudit = 0
+        connect(RunService.RenderStepped, function()
+            if not running then return end
+            local audited = false
+            local now = os.clock()
+            if now >= nextAudit then
+                nextAudit = now + 0.1
+                for box in pairs(records) do apply(box) end
+                audited = true
+            end
             local batch = dirty
             dirty = {}
-            for box in pairs(batch) do if records[box] then apply(box) end end
+            if not audited then
+                for box in pairs(batch) do if records[box] then apply(box) end end
+            end
+            -- Some focus transitions can bypass the signals visible to this script.
+            pcall(function()
+                local focused = UIS:GetFocusedTextBox()
+                if focused then
+                    apply(focused)
+                    if UIS:GetFocusedTextBox() == focused then focused:ReleaseFocus(false) end
+                end
+            end)
         end)
     end)
-    if not ok then warn("[InputLock r3] Startup: " .. tostring(err));stop("error") end
-    warn("[InputLock r3] User editing, click/touch access and focus blocked. Direct Lua Text assignment remains available.")
+    if not ok then warn("[InputLock r4] Startup: " .. tostring(err));stop("error") end
+    warn("[InputLock r4] User editing, click/touch access and focus blocked. Direct Lua Text assignment remains available.")
     return {stop=stop,active=function() return running end,status=function()
         return string.format("PROGRAM ONLY: click/focus/edit OFF\nTextBoxes %d / Failed %d",locked,failures)
     end}
@@ -333,7 +352,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r3  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r4  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -391,7 +410,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r3] All features stopped; input settings restored.")
+        warn("[Utilities r4] All features stopped; input settings restored.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -405,7 +424,7 @@ do
     connect(consoleButton.Activated, function()
         local target = not consoleOpen
         local ok, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", target) end)
-        if ok then consoleOpen = target else warn("[Utilities r3] Console: " .. tostring(err)) end
+        if ok then consoleOpen = target else warn("[Utilities r4] Console: " .. tostring(err)) end
         refresh()
     end)
     connect(allButton.Activated, function() gui:Destroy() end)
@@ -443,7 +462,7 @@ do
         anti = startAntiAFK()
         inputLock = startInputLock()
     end)
-    if not ok then warn("[Utilities r3] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r4] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r3] Ready. Independent toggles; STOP ALL restores and closes.")
+    warn("[Utilities r4] Ready. Independent toggles; STOP ALL restores and closes.")
 end
