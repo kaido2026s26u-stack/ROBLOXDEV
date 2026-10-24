@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r11. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r12. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -186,7 +186,7 @@ do
     host.Parent = gui
     local panel = Instance.new("Frame")
     panel.Name = "Panel"
-    panel.Size = UDim2.fromOffset(300, 344)
+    panel.Size = UDim2.fromOffset(300, 380)
     panel.Position = UDim2.fromOffset(20, 160)
     panel.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
     panel.BorderSizePixel = 0
@@ -195,7 +195,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r11  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r12  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -217,7 +217,7 @@ do
     local antiButton = button("AntiAFKButton", "AntiAFK: ON", 34)
     local consoleButton = button("ConsoleButton", "CONSOLE OPEN", 78)
     local fastButton = button("FastModeButton", "FASTMODE: OFF", 122)
-    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 298)
+    local allButton = button("StopAllButton", "STOP ALL / CLOSE", 334)
     allButton.BackgroundColor3 = Color3.fromRGB(192, 53, 66)
     local status = Instance.new("TextLabel")
     status.Name = "DebugStatus"
@@ -231,18 +231,18 @@ do
     status.Parent = panel
     local performance = Instance.new("TextLabel")
     performance.Name = "PerformanceLabel"
-    performance.Size = UDim2.new(1, -16, 0, 22)
+    performance.Size = UDim2.new(1, -16, 0, 56)
     performance.Position = UDim2.fromOffset(8, 258)
     performance.BackgroundTransparency = 1
     performance.TextColor3 = Color3.fromRGB(210, 220, 235)
     performance.Font = Enum.Font.Code
     performance.TextSize = 12
-    performance.Text = "FPS -- | Frame -- ms"
+    performance.Text = "FPS -- | Render (ms)\nCPU N/A | GPU N/A\nDraw N/A | Tri N/A"
     performance.Parent = panel
     local gauge = Instance.new("Frame")
     gauge.Name = "PerformanceGauge"
     gauge.Size = UDim2.new(1, -16, 0, 5)
-    gauge.Position = UDim2.fromOffset(8, 284)
+    gauge.Position = UDim2.fromOffset(8, 320)
     gauge.BackgroundColor3 = Color3.fromRGB(55, 60, 72)
     gauge.BorderSizePixel = 0
     gauge.Parent = panel
@@ -284,7 +284,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r11] Stopped. AntiAFK key released.")
+        warn("[Utilities r12] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -293,7 +293,7 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r11] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r12] Console OPEN failed: " .. tostring(err)) end
     end)
     connect(fastButton.Activated, function()
         if fastLoading then
@@ -316,7 +316,7 @@ do
         task.spawn(function()
             local loaded, err = pcall(function()
                 if not fast then
-                    warn("[Utilities r11] Loading child FastMode module...")
+                    warn("[Utilities r12] Loading child FastMode module...")
                     local code = game:HttpGet(FAST_URL)
                     if not alive or request ~= fastLoadToken then return end
                     local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
@@ -336,7 +336,7 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r11] FASTMODE failed: " .. fastError)
+                warn("[Utilities r12] FASTMODE failed: " .. fastError)
             end
             refresh()
         end)
@@ -367,7 +367,37 @@ do
         place(Vector2.new(panel.Position.X.Offset, panel.Position.Y.Offset))
     end)
     local sampleCount, sampleSeconds = 0, 0
-    local meterStage, readyAt, nextMeterUI = nil, 0, 0
+    local meterStage, readyAt, nextMeterUI, nextStatsRead = nil, 0, 0, 0
+    local stats
+    pcall(function() stats = game:GetService("Stats") end)
+    local properties = {"RenderCPUFrameTime", "RenderGPUFrameTime", "SceneDrawcallCount", "SceneTriangleCount"}
+    local sums, counts, reported = {}, {}, {}
+    local function clearSamples()
+        sampleCount, sampleSeconds = 0, 0
+        table.clear(sums);table.clear(counts)
+    end
+    local function readStats()
+        for index, property in ipairs(properties) do
+            local ok, value = pcall(function() return stats[property] end)
+            local valid = ok and type(value)=="number" and value==value and value<math.huge
+                and (index<=2 and value>0 or index>2 and value>=0)
+            if valid then
+                sums[index]=(sums[index] or 0)+value
+                counts[index]=(counts[index] or 0)+1
+            end
+            if not reported[index] then
+                reported[index]=true
+                warn(string.format("[Utilities r12] Metric %s: %s",property,
+                    valid and tostring(value) or "N/A (not available/invalid)"))
+            end
+        end
+    end
+    local function average(index)
+        return counts[index] and sums[index]/counts[index] or nil
+    end
+    local function msText(value)
+        return value and string.format("%.2f",value*1000) or "N/A"
+    end
     connect(RunService.RenderStepped, function(dt)
         if not alive then return end
         local now = os.clock()
@@ -375,31 +405,40 @@ do
         local applying = fastLoading or (fast and fast.busy())
         if stage ~= meterStage or applying then
             meterStage = stage
-            sampleCount, sampleSeconds = 0, 0
+            clearSamples()
             readyAt = now + 1
         end
-        if now >= readyAt and dt > 0 and dt < math.huge then
-            sampleCount += 1
-            sampleSeconds += dt
+        if now >= readyAt then
+            if dt > 0 and dt < math.huge then sampleCount+=1;sampleSeconds+=dt end
+            -- Four scalar reads at most five times per second, not per rendered frame.
+            if now >= nextStatsRead then nextStatsRead=now+0.2;readStats() end
         end
         if now < nextMeterUI then return end
-        nextMeterUI = now + 0.5
+        nextMeterUI=now+0.5
         local text
         if applying or now < readyAt then
-            text = "FPS -- | Frame -- ms (settling)"
-            fill.Size = UDim2.fromScale(0, 1)
-        elseif sampleSeconds >= 0.5 and sampleCount > 0 then
-            local fps = sampleCount / sampleSeconds
-            local ms = sampleSeconds * 1000 / sampleCount
-            text = string.format("FPS %.1f | Frame %.1fms", fps, ms)
-            fill.Size = UDim2.fromScale(math.clamp(ms / 50, 0, 1), 1)
-            fill.BackgroundColor3 = if ms <= 16.8 then Color3.fromRGB(80, 200, 130)
-                elseif ms <= 33.4 then Color3.fromRGB(240, 185, 70) else Color3.fromRGB(230, 90, 90)
-            sampleCount, sampleSeconds = 0, 0
-        else
-            return
-        end
-        if performance.Text ~= text then performance.Text = text end
+            text="FPS -- | Render (ms)\nCPU -- | GPU -- (settling)\nDraw -- | Tri --"
+            fill.Size=UDim2.fromScale(0,1)
+            fill.BackgroundColor3=Color3.fromRGB(110,115,125)
+        elseif sampleSeconds>=0.5 and sampleCount>0 then
+            local fps=sampleCount/sampleSeconds
+            local cpu,gpu,draw,tri=average(1),average(2),average(3),average(4)
+            text=string.format("FPS %.1f | Render (ms)\nCPU %s | GPU %s\nDraw %s | Tri %s",fps,msText(cpu),msText(gpu),
+                draw and string.format("%.0f",draw) or "N/A",tri and string.format("%.1fk",tri/1000) or "N/A")
+            -- CPU/GPU overlap: never add them or label this as device utilization.
+            -- Scale is a fixed 60-FPS rendering budget; missing metrics stay neutral.
+            if cpu and gpu then
+                local renderMs=math.max(cpu,gpu)*1000
+                fill.Size=UDim2.fromScale(math.clamp(renderMs/(1000/60),0,1),1)
+                fill.BackgroundColor3=if renderMs<=8.33 then Color3.fromRGB(80,200,130)
+                    elseif renderMs<=16.67 then Color3.fromRGB(240,185,70) else Color3.fromRGB(230,90,90)
+            else
+                fill.Size=UDim2.fromScale(0,1)
+                fill.BackgroundColor3=Color3.fromRGB(110,115,125)
+            end
+            clearSamples()
+        else return end
+        if performance.Text~=text then performance.Text=text end
     end)
     local nextRefresh = 0
     connect(RunService.Heartbeat, function()
@@ -410,7 +449,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r11] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r12] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r11] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r12] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
