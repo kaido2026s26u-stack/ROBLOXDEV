@@ -1,10 +1,32 @@
-# AutoChat v0.1.0 — standalone prototype
+# AutoChat v0.1.1 — standalone prototype
 
 最大20フレーズを登録し、設定した秒数範囲から毎回待ち時間を抽選して送信します。送信先は取得可能なTextChannelから複数選択できます。RXDEVへの統合前の単体版です。
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/main/AutoChat.lua"))()
 ```
+
+## v0.1.1の診断手順
+
+Globalタブ未検出を調べるための試験版です。Globalの自動送信経路を追加した版ではありません。
+
+1. AutoChatを再実行し、タイトルがv0.1.1であることを確認します。送信のSTARTは不要です。
+2. 標準チャットをLOCAL/Hereにした状態で、黄色のSNAP / DIFFを押します。
+3. WATCH 60sを押して、標準チャットをGLOBAL、FRIEND、LOCALへ手動で切り替えます。公開APIを1秒に1回、最大60秒監視します。STOP WATCHで早期終了できます。
+4. GLOBALを表示した状態で、もう一度SNAP / DIFFを押します。手動スナップショット同士の差を比較できます。
+5. Consoleの `[AutoChat DIAG] BEGIN` から `END`、またはWATCH stoppedの集計を確認します。
+
+診断は送信を行いません。ただし通常のAutoChatを別途STARTしている場合、その送信タイマーは通常どおり動作します。
+
+- BASE：初回の値。CHANGED / ADDED / REMOVED：前回から変化した値。
+- NO METADATA CHANGE：調べた範囲の公開情報に変化なし。標準タブが存在しないという意味ではありません。
+- UI label only：Global等のタブ表示の候補は見つかったが、送信経路は未確認。
+- UNAVAILABLE / accessError：そのプロパティや領域にアクセスできなかったことを示します。
+- TRUNCATED：探索上限に達したため、その領域をすべて調べてはいません。
+
+公開チャンネル（RBXSystemを含む診断用一覧）、自分のCanSend、TargetTextChannel、チャット設定を記録します。手動SNAPではPlayerGui / CoreGuiのTextChannelWindow.Targetとタブ表示候補も調べます。通常の受信メッセージラベルや入力欄の本文、登録フレーズは記録しません。CoreGuiがアクセス禁止でも、取得できた範囲の診断は継続します。
+
+探索はTextChatService最大256ノード、手動のみPlayerGui最大800 / CoreGui最大1600ノードです。WATCHは軽量なTextChatService側のみで、変化がない各秒の詳細ログを省きます。手動SNAPとWATCHの比較履歴は分離しています。終了・再実行時に監視を切断します。
 
 ## 操作
 
@@ -34,9 +56,10 @@ STOPは未開始の送信を取り消します。すでに開始したSendAsync�
 ## モジュール構成
 
 - `AutoChat.lua`: 起動用。子モジュールは1つのコミットSHAに固定し、同じ起動内では再利用します。
-- `v0.1.0/Engine.lua`: 設定検証、抽選、待ち時間、複数先への順次送信、キャンセル世代の管理。GUIから独立しています。
-- `v0.1.0/RobloxChat.lua`: チャンネル検出、権限確認、標準チャットAPIの呼び出し。
-- `v0.1.0/App.lua`: 入力・複数選択・状態表示・ドラッグ・終了。mount(get)で明示的に起動します。
+- `v0.1.1/Engine.lua`: 設定検証、抽選、待ち時間、複数先への順次送信、キャンセル世代の管理。GUIから独立しています。
+- `v0.1.1/RobloxChat.lua`: チャンネル検出、権限確認、標準チャットAPIの呼び出し。
+- `v0.1.1/Diagnostics.lua`: 設定・チャンネル・UI参照先の読み取り専用診断、差分、60秒監視。
+- `v0.1.1/App.lua`: 入力・複数選択・状態表示・ドラッグ・終了。mount(get)で明示的に起動します。
 
 各子モジュールは読むだけでは起動しません。RXDEVに追加する際はモジュール取得関数を渡してApp.mountを呼ぶか、Engine.newに送信関数を渡して既存UIから操作できます。
 
@@ -45,3 +68,4 @@ STOPは未開始の送信を取り消します。すでに開始したSendAsync�
 ローカル検証では通信をモック化しています。実際のチャット送信・Global/Friendsタブの公開状況・GUIの見え方は実機検証が必要です。
 
 参考：[TextChannel](https://create.roblox.com/docs/reference/engine/classes/TextChannel)、[TextSource](https://create.roblox.com/docs/reference/engine/classes/TextSource)、[送信結果](https://create.roblox.com/docs/reference/engine/enums/TextChatMessageStatus)、[Cross-server chat](https://create.roblox.com/docs/chat/cross-server-chat)。
+
