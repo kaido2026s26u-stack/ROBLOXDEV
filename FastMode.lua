@@ -2,6 +2,7 @@
 local Lighting = game:GetService('Lighting')
 local RunService = game:GetService('RunService')
 local active = false
+local advanced = false
 local records, connections, cameraConnections = {}, {}, {}
 local queue, seen, head, tail = {}, {}, 1, 0
 local worker
@@ -28,7 +29,7 @@ local function apply(object, property, target)
         object[property] = target
         changed += 1
     end)
-    if not ok then failures += 1;warn('[FastMode r2] Cannot apply '..property..': '..tostring(err)) end
+    if not ok then failures += 1;warn('[FastMode r3] Cannot apply '..property..': '..tostring(err)) end
 end
 local function reduce(object)
     if object:IsA('Lighting') then apply(object,'GlobalShadows',false)
@@ -47,6 +48,10 @@ local function reduce(object)
     elseif object:IsA('BasePart') then
         apply(object,'CastShadow',false)
         apply(object,'Reflectance',0)
+        if advanced and object:IsA('MeshPart') then
+            apply(object,'RenderFidelity',Enum.RenderFidelity.Performance)
+            apply(object,'TextureID','')
+        end
     end
 end
 local function finishWorker()
@@ -67,7 +72,7 @@ local function ensureWorker()
                 -- Incremental discovery: no GetDescendants of the entire map.
                 for _, child in ipairs(object:GetChildren()) do enqueue(child) end
             end)
-            if not ok then failures+=1;warn('[FastMode r2] Visit failed: '..tostring(err)) end
+            if not ok then failures+=1;warn('[FastMode r3] Visit failed: '..tostring(err)) end
             if os.clock()-began >= 0.002 then break end
         end
         if head > tail then finishWorker() end
@@ -84,7 +89,7 @@ local function watch(root, items)
     enqueue(root)
 end
 function module.stop()
-    active = false
+    active = false;advanced = false
     disconnect(connections);disconnect(cameraConnections);finishWorker()
     local restored,preserved,failed = 0,0,0
     for object,record in pairs(records) do
@@ -96,15 +101,15 @@ function module.stop()
                     object[property]=value.original;restored+=1
                 else preserved+=1 end
             end)
-            if not ok then failed+=1;warn('[FastMode r2] Restore failed: '..tostring(err)) end
+            if not ok then failed+=1;warn('[FastMode r3] Restore failed: '..tostring(err)) end
         end
     end
     table.clear(records);table.clear(seen)
-    warn(string.format('[FastMode r2] OFF restored=%d preserved=%d failed=%d; all work cleared',restored,preserved,failed))
+    warn(string.format('[FastMode r3] OFF restored=%d preserved=%d failed=%d; all work cleared',restored,preserved,failed))
 end
 function module.start()
     if active then return end
-    active=true;changed,failures,visited=0,0,0
+    active=true;advanced=false;changed,failures,visited=0,0,0
     seen=setmetatable({}, {__mode='k'})
     local ok,err=pcall(function()
         apply(Lighting,'GlobalShadows',false)
@@ -118,10 +123,23 @@ function module.start()
         cameraChanged()
     end)
     if not ok then module.stop();error(err) end
-    warn('[FastMode r2] ON: shadows, particles/trails/beams, post-effects, decals/textures, reflections and terrain visuals')
+    warn('[FastMode r3] ON: shadows, particles/trails/beams, post-effects, decals/textures, reflections and terrain visuals')
 end
+function module.advance()
+    assert(active, 'Enable FASTMODE before AdvancedFastMode')
+    if advanced then return end
+    advanced=true
+    -- Restart bounded discovery, including any work still pending from normal mode.
+    -- Existing property snapshots are retained, so one OFF restores both levels.
+    finishWorker()
+    seen=setmetatable({}, {__mode='k'})
+    enqueue(Lighting);enqueue(workspace)
+    if workspace.CurrentCamera then enqueue(workspace.CurrentCamera) end
+    warn('[FastMode r3] ADVANCED ON: mesh detail Performance + mesh textures off')
+end
+function module.level() return active and (advanced and 2 or 1) or 0 end
 function module.active() return active end
 function module.status()
-    return string.format('FAST %s | changed %d / errors %d / pending %d',active and 'ON' or 'OFF',changed,failures,math.max(0,tail-head+1))
+    return string.format('%s | changed %d / errors %d / pending %d',active and (advanced and 'ADVANCED ON' or 'FAST ON') or 'FAST OFF',changed,failures,math.max(0,tail-head+1))
 end
 return module
