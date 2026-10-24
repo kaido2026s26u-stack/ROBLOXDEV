@@ -1,10 +1,24 @@
-# AutoChat v0.1.8 — standalone prototype
+# AutoChat v0.1.9 — standalone prototype
 
 最大20フレーズを登録し、設定した秒数範囲から毎回待ち時間を抽選して送信します。送信先は取得可能なTextChannelから複数選択できます。RXDEVへの統合前の単体版です。
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/main/AutoChat.lua"))()
 ```
+
+## UI状態の比較（v0.1.9）
+
+追加した「Local表示」「Global表示」「Global入力中」は、押してから5秒後にUI調査を始めます。ボタン名はユーザーが申告する状態で、実際のタブ選択を自動判定したものではありません。
+
+1. 「Local表示」を押し、5秒以内に標準チャットのLocalを開いてそのまま待つ。
+2. 保存完了後、「Global表示」を押し、同様にGlobalを開いて待つ。
+3. 保存完了後、「Global入力中」を押し、5秒以内にGlobalの入力欄をクリックして数文字入力。Enterを押さず、フォーカスを保って保存完了まで待つ。
+
+ファイル名は `autochat_ui_LocalOpen_…`、`autochat_ui_GlobalOpen_…`、`autochat_ui_GlobalTyping_…`。各状態でTXT/JSONを保存します。開始待ち5秒に加え走査には最低3秒、最大20秒かかります。待機・調査中の重複実行は拒否し、閉じる・再実行で中止します。開始時にAutoChat定期送信を停止し、完了後も自動再開しません。
+
+既存のAppChat/ExperienceChatに加え、CoreGui/PlayerGuiの直下名一覧、chatを含む名前の追加ルート、RobloxGui、取得できたフォーカス中TextBoxのGUIルートを調べます。記録するのはパス・クラス・表示状態・座標・サイズ・入力欄メタデータです。このUI状態調査ではTextLabel/TextButtonの文字列も読みません。入力本文・チャット本文を取得せず、送信・フォーカス変更・UI非表示化はしません。
+
+走査はフレームごと最大96ノードまたは3ms、合計25000ノードまでです。瞬間の原子的なスナップショットではなく、ノードのobservedAtが記録時刻を示します。走査中は対象状態を保ってください。対象外ルートやネイティブUIのうちInstanceとして取得できない部分まで網羅したとは限りません。focusedInput.available=falseはAPI取得失敗、path=nilは取得時に公開TextBoxのフォーカスがなかったことを示します。
 
 ## 手動送信イベント観測（v0.1.8）
 
