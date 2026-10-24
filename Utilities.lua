@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r9. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r10. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -170,7 +170,7 @@ do
     local anti
     local fast
     local fastLoading, fastError, fastLoadToken = false, nil, 0
-    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/f7dac4a023b70207a5dc49a3e537067bfe0827c9/FastMode.lua"
+    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/dec2e589d9996ddc71e5cfdbe5eb7192e36b5e20/FastMode.lua"
     local consoleOpen = false
     local initialConsole = false
     pcall(function() initialConsole = StarterGui:GetCore("DevConsoleVisible") == true end)
@@ -195,7 +195,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r9  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r10  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -242,7 +242,8 @@ do
         elseif fastError then fastButton.Text = "FASTMODE: ERROR / RETRY"
         elseif fast and fast.level() == 1 then fastButton.Text = "AdvancedFastMode: ENABLE"
         elseif fast and fast.level() == 2 then fastButton.Text = "SuperFastMode: ENABLE"
-        elseif fast and fast.level() == 3 then fastButton.Text = "SuperFastMode: ON / ALL OFF"
+        elseif fast and fast.level() == 3 then fastButton.Text = "UltraFastMode: ENABLE"
+        elseif fast and fast.level() == 4 then fastButton.Text = "UltraFastMode: ON / ALL OFF"
         else fastButton.Text = "FASTMODE: OFF" end
         local fastStatus = fastLoading and "Fetching child module..." or fastError and ("FAST ERROR: " .. fastError) or fast and fast.status() or "FAST OFF (not loaded)"
         local text = (anti and anti.status() or "AntiAFK stopped") .. "\n" .. fastStatus
@@ -260,7 +261,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r9] Stopped. AntiAFK key released.")
+        warn("[Utilities r10] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -269,7 +270,7 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r9] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r10] Console OPEN failed: " .. tostring(err)) end
     end)
     connect(fastButton.Activated, function()
         if fastLoading then
@@ -279,7 +280,8 @@ do
         if fast and fast.active() then
             local changed, err = pcall(function()
                 if fast.level() == 1 then fast.advance()
-                elseif fast.level() == 2 then fast.super() else fast.stop() end
+                elseif fast.level() == 2 then fast.super()
+                elseif fast.level() == 3 then fast.ultra() else fast.stop() end
             end)
             if changed then fastError = nil else fastError = tostring(err) end
             refresh();return
@@ -291,14 +293,14 @@ do
         task.spawn(function()
             local loaded, err = pcall(function()
                 if not fast then
-                    warn("[Utilities r9] Loading child FastMode module...")
+                    warn("[Utilities r10] Loading child FastMode module...")
                     local code = game:HttpGet(FAST_URL)
                     if not alive or request ~= fastLoadToken then return end
                     local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
                     assert(chunk, compileErr)
                     local controller = chunk()
                     assert(type(controller) == "table", "Invalid FastMode module")
-                    for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super"}) do
+                    for _, method in ipairs({"start", "stop", "active", "status", "advance", "level", "super", "ultra"}) do
                         assert(type(controller[method]) == "function", "Missing FastMode." .. method)
                     end
                     if not alive or request ~= fastLoadToken then return end
@@ -311,7 +313,7 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r9] FASTMODE failed: " .. fastError)
+                warn("[Utilities r10] FASTMODE failed: " .. fastError)
             end
             refresh()
         end)
@@ -350,7 +352,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r9] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r10] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r9] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r10] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
