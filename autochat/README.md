@@ -1,10 +1,22 @@
-# AutoChat v0.1.7 — standalone prototype
+# AutoChat v0.1.8 — standalone prototype
 
 最大20フレーズを登録し、設定した秒数範囲から毎回待ち時間を抽選して送信します。送信先は取得可能なTextChannelから複数選択できます。RXDEVへの統合前の単体版です。
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/main/AutoChat.lua"))()
 ```
+
+## 手動送信イベント観測（v0.1.8）
+
+標準チャット側でLocalを選択 → 「Local観測 30秒」 → 30秒以内に標準チャットへ手動で1回送信してください。30秒後に自動保存します。次にGlobalを選択し「Global観測 30秒」で同じ手順を行い、2つのJSONを比較します。タブの実選択はAPIから確認できないため、phaseは押したボタンによる申告値です。
+
+観測開始時にAutoChatの定期送信を停止します。観測中はAutoChat STARTと2つのAPI送信テストを受け付けません。観測の連打・同時開始は防ぎ、完了後も定期送信は自動再開しません。他のScriptや手動操作による送信は区別できないので、観測中は他の自動送信を停止してください。
+
+TextChatService.SendingMessage / MessageReceived、発見したTextChannel.MessageReceived、チャンネル追加削除、TargetTextChannel変更をConnectで観測します。既存のチャットコールバックは書き換えません。本文・翻訳・PrefixText・Metadataは読みません。記録はイベント名、相対時刻、Status、チャンネルパス、自分由来か／送信元なし、接続成否と開始終了時の状態です。他人のTextSource由来のメッセージは件数のみ集計します。イベントが複数経路で重複するため、件数は送信数ではありません。
+
+30秒、最大200イベントまで記録します。上限以降はtruncated=trueです。待機中の観測接続はなく、完了・画面終了・再実行で解除します。閉じた場合は観測を破棄して保存しません。イベントが0件でもGlobalで送れなかったとは断定できません。フック非対応と「接続できたが発火なし」はhooksで区別できます。
+
+保存ファイル名は `autochat_manual_Local_<時刻>_<連番>` / `autochat_manual_Global_…` です。既存調査は `autochat_diagnostics_…`、API送信テストは `autochat_route_CurrentTarget_…` / `autochat_route_RBXGeneral_…` とし、TXT/JSONを同名で保存します。以前のレポートは改名しません。
 
 ## 送信ルート比較（v0.1.7）
 
