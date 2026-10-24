@@ -1,6 +1,6 @@
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 do
-    print("[AntiAFK] Loaded revision 2 (keyboard debug)")
+    print("[AntiAFK] Loaded revision 3 (keyboard debug)")
     local MIN_INTERVAL, MAX_INTERVAL = 30, 60
     local PRESS_SECONDS = 0.08
     local DEBUG = true
@@ -18,7 +18,6 @@ do
     local running, enabled = true, true
     local connections = {}
     local controlGui, statusLabel
-    local lastActivity = os.clock()
     local nextDue, nextUI = math.huge, 0
     local sendKey, backend = nil, "unavailable"
     local pressedKey, releaseAt
@@ -199,19 +198,9 @@ do
                     down and "DOWN" or "UP", receipt.key.Name, receipt.id, tostring(processed)))
                 return
             end
-            lastActivity = now
-            -- User activity takes priority over the short synthetic hold.
-            if pressedKey then
-                local released, releaseErr = release()
-                if not released then disable("Release on real input: " .. tostring(releaseErr)) end
-            end
         end
         connect(UserInputService.InputBegan, function(input, processed) observe(input, true, processed) end)
         connect(UserInputService.InputEnded, function(input, processed) observe(input, false, processed) end)
-        connect(UserInputService.InputChanged, function() lastActivity = os.clock() end)
-        connect(UserInputService.TextBoxFocused, function() lastActivity = os.clock() end)
-        connect(UserInputService.TextBoxFocusReleased, function() lastActivity = os.clock() end)
-        connect(UserInputService.WindowFocused, function() lastActivity = os.clock() end)
         connect(player.Idled, function(seconds)
             debugLog(string.format("IDLED %.1fs (observation only)", seconds))
         end)
@@ -234,32 +223,19 @@ do
                 receipt = nil
             end
             if enabled and not pressedKey and now >= nextDue then
-                local checked, busy = pcall(function()
-                    return UserInputService:GetFocusedTextBox() ~= nil
-                        or #UserInputService:GetKeysPressed() > 0
-                        or #UserInputService:GetMouseButtonsPressed() > 0
-                        or #UserInputService:GetTouches() > 0
-                end)
-                if not checked then disable("Input check failed: " .. tostring(busy))
-                elseif busy or now - lastActivity < 3 then
-                    state = "Skipped: user active"
-                    debugLog("SKIP: user active/chat/key/mouse/touch; next randomized interval")
-                    schedule(now)
+                local key = KEYS[math.random(1, #KEYS)]
+                attempts += 1
+                receipt = {id=attempts,key=key,down=false,up=false,checkAt=now+0.6}
+                pressedKey, releaseAt = key, now + PRESS_SECONDS
+                debugLog(string.format("SEND #%d %s via %s", attempts, key.Name, backend))
+                local pressed, pressErr = pcall(function() sendKey(true, key) end)
+                if not pressed then
+                    local released, releaseErr = release()
+                    disable("KeyDown failed: " .. tostring(pressErr) .. (released and "" or "; KeyUp: " .. tostring(releaseErr)))
                 else
-                    local key = KEYS[math.random(1, #KEYS)]
-                    attempts += 1
-                    receipt = {id=attempts,key=key,down=false,up=false,checkAt=now+0.6}
-                    pressedKey, releaseAt = key, now + PRESS_SECONDS
-                    debugLog(string.format("SEND #%d %s via %s", attempts, key.Name, backend))
-                    local pressed, pressErr = pcall(function() sendKey(true, key) end)
-                    if not pressed then
-                        local released, releaseErr = release()
-                        disable("KeyDown failed: " .. tostring(pressErr) .. (released and "" or "; KeyUp: " .. tostring(releaseErr)))
-                    else
-                        sent += 1
-                        state = "Sent " .. key.Name
-                        schedule(now)
-                    end
+                    sent += 1
+                    state = "Sent " .. key.Name
+                    schedule(now)
                 end
             end
             if now >= nextUI then
