@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r6. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r7. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -170,7 +170,7 @@ do
     local anti
     local fast
     local fastLoading, fastError, fastLoadToken = false, nil, 0
-    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/f2dd75a54ba71a8fda841b58ee3e782ba5e6c5d9/FastMode.lua"
+    local FAST_URL = "https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/db12240662bd7a549efb47e2d999db25130090f9/FastMode.lua"
     local consoleOpen = false
     local initialConsole = false
     pcall(function() initialConsole = StarterGui:GetCore("DevConsoleVisible") == true end)
@@ -195,7 +195,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r6  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r7  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -255,7 +255,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r6] Stopped. AntiAFK key released.")
+        warn("[Utilities r7] Stopped. AntiAFK key released.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -264,7 +264,7 @@ do
     end)
     connect(consoleButton.Activated, function()
         local opened, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", true) end)
-        if opened then consoleOpen = true else warn("[Utilities r6] Console OPEN failed: " .. tostring(err)) end
+        if opened then consoleOpen = true else warn("[Utilities r7] Console OPEN failed: " .. tostring(err)) end
     end)
     connect(fastButton.Activated, function()
         if fastLoading then
@@ -283,7 +283,7 @@ do
         task.spawn(function()
             local loaded, err = pcall(function()
                 if not fast then
-                    warn("[Utilities r6] Loading child FastMode module...")
+                    warn("[Utilities r7] Loading child FastMode module...")
                     local code = game:HttpGet(FAST_URL)
                     if not alive or request ~= fastLoadToken then return end
                     local chunk, compileErr = loadstring(code, "ROBLOXDEV_FastMode")
@@ -303,7 +303,7 @@ do
             if not loaded then
                 if fast then pcall(fast.stop) end
                 fastError = tostring(err)
-                warn("[Utilities r6] FASTMODE failed: " .. fastError)
+                warn("[Utilities r7] FASTMODE failed: " .. fastError)
             end
             refresh()
         end)
@@ -342,7 +342,7 @@ do
     local ok, err = pcall(function()
         anti = startAntiAFK()
     end)
-    if not ok then warn("[Utilities r6] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r7] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r6] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
+    warn("[Utilities r7] Ready. AntiAFK + Console OPEN + optional FASTMODE (nested loadstring).")
 end
