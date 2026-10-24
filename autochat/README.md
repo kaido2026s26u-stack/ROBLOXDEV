@@ -1,4 +1,4 @@
-# AutoChat v0.1.2 — standalone prototype
+# AutoChat v0.1.3 — standalone prototype
 
 最大20フレーズを登録し、設定した秒数範囲から毎回待ち時間を抽選して送信します。送信先は取得可能なTextChannelから複数選択できます。RXDEVへの統合前の単体版です。
 
@@ -6,18 +6,29 @@
 loadstring(game:HttpGet("https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/main/AutoChat.lua"))()
 ```
 
-## v0.1.2の一時調査ボタン
+## v0.1.3の追加調査
+
+v0.1.2で結果がBubbleChatの階層に偏ったため、BubbleChatという名前の枝と自分のAutoChat画面を探索から外します。除外した枝数をレポートに記録するので、前版の探索ノード数とは直接比較できません。
+
+- `Input.TextBox changes / samples`：ChatInputBarConfiguration.TextBoxの参照先と短時間の変化。nilやアクセス失敗もそのまま表示します。参照IDを付けるため、同じパスの別オブジェクトへの置き換えも区別します。
+- `TEXTBOX / BOX STATE`：設定から参照された入力欄、およびチャットUI内で見つかった入力欄のパス・表示状態・編集可否・サイズ。入力欄のTextは読み書きしません。
+- `CHAT ROOT / UI STRUCT`：BubbleChat以外のチャット階層。深さ4までの候補から浅い重要部分を最大18行で表示します。入力欄はこの深さ制限より深くても調べます。
+- Tabs / Navigation等の配下では、子の名前が単なるLabelでも、既知の短いタブ表示名を確認します。メッセージの本文や入力文はログに出しません。
+
+公開TextBoxがnilでも、それだけで標準UIに入力欄がないとは判断できません。調査結果は送信経路の存在や送信成功を証明しません。
+
+## v0.1.3の一時調査ボタン
 
 Global未検出を調べるため、日本語の「調査」ボタンに一本化しました。旧SNAP / DIFF・WATCH操作は不要です。
 
-1. AutoChatを再実行し、タイトルがv0.1.2であることを確認します。
+1. AutoChatを再実行し、タイトルがv0.1.3であることを確認します。
 2. Roblox標準チャットでGLOBALを表示しておきます。
 3. 黄色の「調査」を一度押し、そのまま完了を待ちます。送信のSTARTは不要です。
-4. Consoleの `[AutoChat 調査 v0.1.2 #1]` の `REPORT BEGIN` から `調査完了 / REPORT END` までを共有してください。
+4. Consoleの `[AutoChat 調査 v0.1.3 #1]` の `REPORT BEGIN` から `調査完了 / REPORT END` までを共有してください。
 
 通常は数秒で完了します。調査は一度だけ実行して接続を切断します。連打しても同時に重複起動しません。終了・再実行時は進行中の調査を中止します。
 
-調査対象は、公開チャンネル・自身のCanSend・チャット設定・TargetTextChannelの短時間の推移・TextChannelWindow.Target・チャットタブ表示候補と親を含む表示状態です。チャット関連の名前を持つ枝を優先して探索します。アクセスできる範囲のTextChatService / CoreGui / PlayerGuiのみを読みます。
+調査対象は、公開チャンネル・自身のCanSend・チャット設定・TargetTextChannelとTextBox参照の短時間の推移・TextChannelWindow.Target・チャットUI構造・タブ表示候補と親を含む表示状態です。チャット関連の名前を持つ枝を優先して探索します。アクセスできる範囲のTextChatService / CoreGui / PlayerGuiのみを読みます。
 
 前版の全体探索上限（CoreGui 1600 / PlayerGui 800）を改め、フレームごとに最大96ノード・約3msに分割し、全体は最大25000ノード・20秒で打ち切ります。TargetTextChannelの短時間観測を含め最低約3秒の調査です。時間切れ・ノード上限・アクセスエラー・詳細表示上限はレポートに明記します。レポートは結果の概要と限られた詳細行にまとめます。
 
@@ -53,10 +64,10 @@ STOPは未開始の送信を取り消します。すでに開始したSendAsync�
 ## モジュール構成
 
 - `AutoChat.lua`: 起動用。子モジュールは1つのコミットSHAに固定し、同じ起動内では再利用します。
-- `v0.1.2/Engine.lua`: 設定検証、抽選、待ち時間、複数先への順次送信、キャンセル世代の管理。GUIから独立しています。
-- `v0.1.2/RobloxChat.lua`: チャンネル検出、権限確認、標準チャットAPIの呼び出し。
-- `v0.1.2/Diagnostics.lua`: チャット優先の一回調査、フレーム分割、結果レポート、自動終了。
-- `v0.1.2/App.lua`: 入力・複数選択・状態表示・ドラッグ・終了。mount(get)で明示的に起動します。
+- `v0.1.3/Engine.lua`: 設定検証、抽選、待ち時間、複数先への順次送信、キャンセル世代の管理。GUIから独立しています。
+- `v0.1.3/RobloxChat.lua`: チャンネル検出、権限確認、標準チャットAPIの呼び出し。
+- `v0.1.3/Diagnostics.lua`: チャット優先の一回調査、フレーム分割、結果レポート、自動終了。
+- `v0.1.3/App.lua`: 入力・複数選択・状態表示・ドラッグ・終了。mount(get)で明示的に起動します。
 
 各子モジュールは読むだけでは起動しません。RXDEVに追加する際はモジュール取得関数を渡してApp.mountを呼ぶか、Engine.newに送信関数を渡して既存UIから操作できます。
 
