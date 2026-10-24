@@ -1,6 +1,6 @@
--- Standalone AutoChat v0.1.0. RXDEV itself is unchanged.
-local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/9df4f57de9bc795114d495904ac6e6328ff06a9d/autochat/v0.1.0/"
-local specs={Engine={"new","parse","validate"},RobloxChat={"discover","availability","send"},App={"mount"}}
+-- Standalone AutoChat v0.1.1. RXDEV itself is unchanged.
+local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/5dc6b40d1fc276fb05e31bc9781fec03c53e9204/autochat/v0.1.1/"
+local specs={Engine={"new","parse","validate"},RobloxChat={"discover","availability","send"},App={"mount"},Diagnostics={"new"}}
 local cache={}
 local function get(name)
     assert(specs[name],"Unknown AutoChat module")
@@ -16,3 +16,4 @@ end
 local ok,result=pcall(function() return get("App").mount(get) end)
 if not ok then warn("[AutoChat] Startup: "..tostring(result));return end
 return result
+
