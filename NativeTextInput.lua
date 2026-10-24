@@ -16,11 +16,14 @@ do
     local boxConnections = {}
     local applying = {}
     local failureReported = setmetatable({}, {__mode = "k"})
+    local lastCursor = {}
+    local missingBox, missingSince
+    local caretRepairs = 0
     local controlGui, statusLabel
     local applied, failed, reasserted = 0, 0, 0
     local function refresh()
         if statusLabel then
-            statusLabel.Text = string.format("CONTINUOUS: native input OFF\nTextBoxes %d / Failed %d\nReasserted %d", applied, failed, reasserted)
+            statusLabel.Text = string.format("CONTINUOUS: native input OFF\nTextBoxes %d / Failed %d\nReasserted %d / Caret %d", applied, failed, reasserted, caretRepairs)
         end
     end
     local function stop(reason)
@@ -33,6 +36,7 @@ do
         end
         table.clear(boxConnections)
         table.clear(applying)
+        table.clear(lastCursor)
         local restored = 0
         for box, original in pairs(originals) do
             pcall(function()
@@ -48,7 +52,7 @@ do
             controlGui = nil
             gui:Destroy()
         end
-        warn(string.format("[NativeInputTest r2] Stopped: %s; restored=%d", tostring(reason), restored))
+        warn(string.format("[NativeInputTest r3] Stopped: %s; restored=%d", tostring(reason), restored))
     end
     local function connect(signal, callback)
         local connection = signal:Connect(callback)
@@ -84,7 +88,7 @@ do
         handle.Name = "DragHandle"
         handle.Size = UDim2.new(1, 0, 0, 28)
         handle.BackgroundTransparency = 1
-        handle.Text = "TEXT INPUT r2: FORCE OFF"
+        handle.Text = "TEXT INPUT r3: CARET"
         handle.TextColor3 = Color3.fromRGB(210, 220, 235)
         handle.Font = Enum.Font.GothamBold
         handle.TextSize = 12
@@ -165,7 +169,7 @@ do
         local function forget(box)
             local items = boxConnections[box]
             if items then for _, connection in ipairs(items) do connection:Disconnect() end end
-            boxConnections[box], originals[box], applying[box], failureReported[box] = nil, nil, nil, nil
+            boxConnections[box], originals[box], applying[box], failureReported[box], lastCursor[box] = nil, nil, nil, nil, nil
         end
         apply = function(box)
             if not running or applying[box] or not box:IsA("TextBox") then return end
@@ -188,7 +192,7 @@ do
             if not worked and not failureReported[box] then
                 failureReported[box] = true
                 failed += 1
-                warn("[NativeInputTest r2] Cannot enforce: " .. tostring(applyErr))
+                warn("[NativeInputTest r3] Cannot enforce: " .. tostring(applyErr))
             end
             return worked
         end
@@ -204,16 +208,43 @@ do
                 roots[#roots + 1] = root
             end)
             if watched then watched, watchErr = scan(root) end
-            warn(string.format("[NativeInputTest r2] %s: %s", label, watched and "watched" or tostring(watchErr)))
+            warn(string.format("[NativeInputTest r3] %s: %s", label, watched and "watched" or tostring(watchErr)))
         end
         watch(playerGui, "PlayerGui")
         watch(workspace, "Workspace/SurfaceGui")
         local accessible, coreGui = pcall(function() return game:GetService("CoreGui") end)
         if accessible and coreGui then watch(coreGui, "CoreGui/chat")
-        else warn("[NativeInputTest r2] CoreGui unavailable: " .. tostring(coreGui)) end
+        else warn("[NativeInputTest r3] CoreGui unavailable: " .. tostring(coreGui)) end
         connect(UserInputService.TextBoxFocused, function(box)
             apply(box)
         end)
+        local function maintainCaret(box)
+            if not box then missingBox, missingSince = nil, nil; return end
+            local cursor = box.CursorPosition
+            if cursor >= 1 then
+                lastCursor[box] = cursor
+                missingBox, missingSince = nil, nil
+                return
+            end
+            if not box.TextEditable then return end
+            local now = os.clock()
+            if missingBox ~= box then missingBox, missingSince = box, now; return end
+            if now - missingSince < 0.05 then return end
+            local text = box.Text
+            local position = math.clamp(lastCursor[box] or (#text + 1), 1, #text + 1)
+            -- CursorPosition uses UTF-8 byte offsets; avoid the middle of a code point.
+            while position > 1 do
+                local byte = string.byte(text, position)
+                if not byte or byte < 128 or byte >= 192 then break end
+                position -= 1
+            end
+            if UserInputService:GetFocusedTextBox() ~= box then return end
+            box.CursorPosition = position
+            lastCursor[box] = position
+            caretRepairs += 1
+            missingBox, missingSince = nil, nil
+            warn(string.format("[NativeInputTest r3] Standard caret repaired: %s cursor=%d", box.Name, position))
+        end
         local nextScan, nextUI = os.clock() + 0.5, 0
         connect(RunService.RenderStepped, function()
             if not running then return end
@@ -223,6 +254,7 @@ do
             pcall(function()
                 local box = UserInputService:GetFocusedTextBox()
                 if box then apply(box) end
+                maintainCaret(box)
             end)
             local now = os.clock()
             if now >= nextScan then
@@ -232,7 +264,7 @@ do
             if now >= nextUI then nextUI = now + 0.25; refresh() end
         end)
         refresh()
-        warn("[NativeInputTest r2] Continuous enforcement ON: property change + focus + every frame + 0.5s scan. STOP restores settings.")
+        warn("[NativeInputTest r3] Native input OFF + standard caret repair ON. Rendering is handled by Roblox; STOP restores settings.")
     end, function(message) return tostring(message) end)
-    if not ok then warn("[NativeInputTest r2] " .. err); stop("error") end
+    if not ok then warn("[NativeInputTest r3] " .. err); stop("error") end
 end
