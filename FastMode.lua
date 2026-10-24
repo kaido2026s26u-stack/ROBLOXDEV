@@ -182,6 +182,7 @@ function module.ultra()
 end
 function module.level() return active and (ultraMode and 4 or superMode and 3 or advanced and 2 or 1) or 0 end
 function module.active() return active end
+function module.busy() return worker ~= nil end
 function module.status()
     return string.format('%s | changed %d / errors %d / pending %d',active and (ultraMode and 'ULTRA ON' or superMode and 'SUPER ON' or advanced and 'ADVANCED ON' or 'FAST ON') or 'FAST OFF',changed,failures,math.max(0,tail-head+1))
 end
