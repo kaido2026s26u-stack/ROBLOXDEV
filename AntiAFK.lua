@@ -1,6 +1,7 @@
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 do
-    print("[AntiAFK] Loaded revision 3 (keyboard debug)")
+    local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
+    warn(LOG_PREFIX .. "Loaded revision 4; NO USER-ACTIVITY GUARDS")
     local MIN_INTERVAL, MAX_INTERVAL = 30, 60
     local PRESS_SECONDS = 0.08
     local DEBUG = true
@@ -24,8 +25,10 @@ do
     local receipt
     local attempts, sent, confirmed = 0, 0, 0
     local state = "Starting"
+    local nextDiagnostic = 0
+    local disabledReason = "none"
     local function debugLog(message)
-        if DEBUG then print("[AntiAFK] " .. message) end
+        if DEBUG then warn(LOG_PREFIX .. message) end
     end
     local function release()
         if not pressedKey then return true end
@@ -38,8 +41,9 @@ do
     end
     local function disable(reason)
         enabled = false
+        disabledReason = tostring(reason)
         state = "ERROR - see Console"
-        warn("[AntiAFK] Disabled: " .. tostring(reason))
+        warn(LOG_PREFIX .. "Disabled: " .. tostring(reason))
     end
     local function stop(reason)
         if not running then return end
@@ -47,7 +51,7 @@ do
         for _, connection in ipairs(connections) do connection:Disconnect() end
         table.clear(connections)
         local ok, err = release()
-        if not ok then warn("[AntiAFK] Key release failed: " .. tostring(err)) end
+        if not ok then warn(LOG_PREFIX .. "Key release failed: " .. tostring(err)) end
         if controlGui then
             local gui = controlGui
             controlGui = nil
@@ -89,7 +93,7 @@ do
         handle.Name = "DragHandle"
         handle.Size = UDim2.new(1, 0, 0, 28)
         handle.BackgroundTransparency = 1
-        handle.Text = "ANTI AFK DEBUG  -  drag"
+        handle.Text = "ANTI AFK r4  -  drag"
         handle.TextColor3 = Color3.fromRGB(210, 220, 235)
         handle.Font = Enum.Font.GothamBold
         handle.TextSize = 12
@@ -238,6 +242,12 @@ do
                     schedule(now)
                 end
             end
+            if now >= nextDiagnostic then
+                nextDiagnostic = now + 10
+                debugLog(string.format("STATE enabled=%s pending=%s next=%.1fs state=%s reason=%s",
+                    tostring(enabled), pressedKey and pressedKey.Name or "none",
+                    enabled and math.max(0, nextDue-now) or 0, state, disabledReason))
+            end
             if now >= nextUI then
                 nextUI = now + 0.25
                 statusLabel.Text = string.format("%s | %s\nSent %d / Observed %d\nNext %.1fs",
@@ -246,5 +256,5 @@ do
         end)
         debugLog("Ready. Random 30-60s, F13/F14/F15. Success requires a real idle test.")
     end, function(message) return tostring(message) end)
-    if not ok then warn("[AntiAFK] " .. err); stop("error") end
+    if not ok then warn(LOG_PREFIX .. err); stop("error") end
 end
