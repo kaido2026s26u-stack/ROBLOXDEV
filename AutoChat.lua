@@ -1,6 +1,6 @@
--- Standalone AutoChat v0.1.4. RXDEV itself is unchanged.
-local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/41f5b113b02b78717940010a3f17d5a65a745827/autochat/v0.1.4/"
-local specs={Engine={"new","parse","validate"},RobloxChat={"discover","availability","send"},App={"mount"},Diagnostics={"new"}}
+-- Standalone AutoChat v0.1.5. RXDEV itself is unchanged.
+local BASE="https://raw.githubusercontent.com/kaido2026s26u-stack/ROBLOXDEV/80a56333d3d35e804e7a70c137a9a4382573b436/autochat/v0.1.5/"
+local specs={Engine={"new","parse","validate"},RobloxChat={"discover","availability","send"},App={"mount"},Diagnostics={"new"},Storage={"new"}}
 local cache={}
 local function get(name)
     assert(specs[name],"Unknown AutoChat module")
