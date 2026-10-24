@@ -1,4 +1,4 @@
--- ROBLOXDEV Utilities r2. Self-contained; no nested loaders or shared globals.
+-- ROBLOXDEV Utilities r3. Self-contained; no nested loaders or shared globals.
 -- F13/F14/F15 timer test. Debug receipt does not prove AFK timer reset.
 local function startAntiAFK()
     local LOG_PREFIX = string.format("[AntiAFK r4 @%.3f] ", os.clock())
@@ -167,7 +167,7 @@ local function startInputLock()
     local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
     if not playerGui then return end
     local running = true
-    local connections, records, roots = {}, {}, {}
+    local connections, records, dirty = {}, {}, {}
     local locked, failures = 0, 0
     local fields = {"TextEditable", "ClearTextOnFocus", "ShowNativeInput", "Active", "Selectable", "Interactable"}
     local function connect(signal, fn)
@@ -179,31 +179,37 @@ local function startInputLock()
         for _, c in ipairs(connections) do c:Disconnect() end
         for box, record in pairs(records) do
             for _, c in ipairs(record.connections) do c:Disconnect() end
+            for _, c in ipairs(record.shieldConnections or {}) do c:Disconnect() end
             pcall(function() if record.shield then record.shield:Destroy() end end)
             for key, original in pairs(record.originals) do
                 pcall(function() if box.Parent then box[key] = original end end)
             end
         end
-        table.clear(records);table.clear(connections)
-        warn("[InputLock r2] Stopped; properties and click access restored: " .. tostring(reason))
+        table.clear(records);table.clear(dirty);table.clear(connections)
+        warn("[InputLock r3] Stopped; properties and click access restored: " .. tostring(reason))
     end
     local apply
     apply = function(box)
         if not running or not box:IsA("TextBox") then return end
         local record = records[box]
         if not record then
-            record = {originals={},connections={},busy=false}
+            record = {originals={},connections={},shieldConnections={},busy=false}
             records[box] = record;locked += 1
             for _, key in ipairs(fields) do
                 pcall(function()
                     record.originals[key] = box[key]
-                    table.insert(record.connections, box:GetPropertyChangedSignal(key):Connect(function() apply(box) end))
+                    table.insert(record.connections, box:GetPropertyChangedSignal(key):Connect(function()
+                        dirty[box] = true
+                        apply(box)
+                    end))
                 end)
             end
             table.insert(record.connections, box.Destroying:Connect(function()
                 for _, c in ipairs(record.connections) do c:Disconnect() end
-                records[box] = nil
+                for _, c in ipairs(record.shieldConnections) do c:Disconnect() end
+                records[box], dirty[box] = nil, nil
             end))
+            table.insert(record.connections, box:GetPropertyChangedSignal("ZIndex"):Connect(function() apply(box) end))
             table.insert(record.connections, box.Focused:Connect(function()
                 if not running or record.busy then return end
                 record.busy = true
@@ -216,6 +222,8 @@ local function startInputLock()
         local ok, err = pcall(function()
             for key in pairs(record.originals) do if box[key] ~= false then box[key] = false end end
             if not record.shield or not record.shield.Parent then
+                for _, c in ipairs(record.shieldConnections) do c:Disconnect() end
+                table.clear(record.shieldConnections)
                 local shield = Instance.new("TextButton")
                 record.shield = shield
                 shield.Name = "ROBLOXDEV_InputShield"
@@ -228,45 +236,57 @@ local function startInputLock()
                 shield.Size = UDim2.fromScale(1, 1)
                 pcall(function() shield.InputSink = Enum.InputSink.All end)
                 shield.Parent = box
+                table.insert(record.shieldConnections, shield.Destroying:Connect(function()
+                    record.shield = nil
+                    if running and records[box] then dirty[box] = true end
+                end))
+                for _, key in ipairs({"Parent", "Visible", "ZIndex", "Active", "Size"}) do
+                    table.insert(record.shieldConnections, shield:GetPropertyChangedSignal(key):Connect(function()
+                        if running and not record.busy then dirty[box] = true end
+                    end))
+                end
             end
-            record.shield.ZIndex = box.ZIndex + 1
-            record.shield.Visible = true
+            local shield = record.shield
+            if shield.Parent ~= box then shield.Parent = box end
+            if shield.ZIndex ~= box.ZIndex + 1 then shield.ZIndex = box.ZIndex + 1 end
+            if not shield.Visible then shield.Visible = true end
+            if not shield.Active then shield.Active = true end
+            if shield.Size ~= UDim2.fromScale(1, 1) then shield.Size = UDim2.fromScale(1, 1) end
             if UIS:GetFocusedTextBox() == box then box:ReleaseFocus(false) end
         end)
         record.busy = false
         if not ok and not record.warned then
             record.warned = true;failures += 1
-            warn("[InputLock r2] Cannot fully lock " .. tostring(box.Name) .. ": " .. tostring(err))
+            warn("[InputLock r3] Cannot fully lock " .. tostring(box.Name) .. ": " .. tostring(err))
         end
     end
     local function scan(root)
         pcall(function() for _, item in ipairs(root:GetDescendants()) do apply(item) end end)
     end
     local function watch(root)
-        roots[#roots+1] = root
-        connect(root.DescendantAdded, apply);scan(root)
+        connect(root.DescendantAdded, function(item)
+            if item:IsA("TextBox") then apply(item) end
+        end)
+        scan(root)
     end
     local ok, err = pcall(function()
         watch(playerGui);watch(workspace)
         local found, core = pcall(function() return game:GetService("CoreGui") end)
-        if found and core then watch(core) else warn("[InputLock r2] CoreGui not accessible") end
+        if found and core then watch(core) else warn("[InputLock r3] CoreGui not accessible") end
         connect(UIS.TextBoxFocused, function(box)
             apply(box)
             pcall(function() box:ReleaseFocus(false) end)
         end)
-        local nextScan = 0
-        connect(RunService.RenderStepped, function()
-            if not running then return end
-            for box in pairs(records) do apply(box) end
-            pcall(function() local box = UIS:GetFocusedTextBox();if box then apply(box) end end)
-            if os.clock() >= nextScan then
-                nextScan = os.clock() + 0.5
-                for _, root in ipairs(roots) do scan(root) end
-            end
+        -- Only changed fields/shields are rechecked. No idle polling or recurring world scan.
+        connect(RunService.Heartbeat, function()
+            if not running or next(dirty) == nil then return end
+            local batch = dirty
+            dirty = {}
+            for box in pairs(batch) do if records[box] then apply(box) end end
         end)
     end)
-    if not ok then warn("[InputLock r2] Startup: " .. tostring(err));stop("error") end
-    warn("[InputLock r2] User editing, click/touch access and focus blocked. Direct Lua Text assignment remains available.")
+    if not ok then warn("[InputLock r3] Startup: " .. tostring(err));stop("error") end
+    warn("[InputLock r3] User editing, click/touch access and focus blocked. Direct Lua Text assignment remains available.")
     return {stop=stop,active=function() return running end,status=function()
         return string.format("PROGRAM ONLY: click/focus/edit OFF\nTextBoxes %d / Failed %d",locked,failures)
     end}
@@ -313,7 +333,7 @@ do
     title.Name = "DragHandle"
     title.Size = UDim2.new(1, 0, 0, 30)
     title.BackgroundTransparency = 1
-    title.Text = "ROBLOXDEV UTILITIES r2  -  drag"
+    title.Text = "ROBLOXDEV UTILITIES r3  -  drag"
     title.TextColor3 = Color3.new(1, 1, 1)
     title.TextSize = 13
     title.Font = Enum.Font.GothamBold
@@ -371,7 +391,7 @@ do
         if consoleOpen ~= initialConsole then
             pcall(function() StarterGui:SetCore("DevConsoleVisible", initialConsole) end)
         end
-        warn("[Utilities r2] All features stopped; input settings restored.")
+        warn("[Utilities r3] All features stopped; input settings restored.")
     end
     gui.Destroying:Connect(cleanup)
     connect(antiButton.Activated, function()
@@ -385,7 +405,7 @@ do
     connect(consoleButton.Activated, function()
         local target = not consoleOpen
         local ok, err = pcall(function() StarterGui:SetCore("DevConsoleVisible", target) end)
-        if ok then consoleOpen = target else warn("[Utilities r2] Console: " .. tostring(err)) end
+        if ok then consoleOpen = target else warn("[Utilities r3] Console: " .. tostring(err)) end
         refresh()
     end)
     connect(allButton.Activated, function() gui:Destroy() end)
@@ -423,7 +443,7 @@ do
         anti = startAntiAFK()
         inputLock = startInputLock()
     end)
-    if not ok then warn("[Utilities r2] Startup: " .. tostring(err));gui:Destroy();return end
+    if not ok then warn("[Utilities r3] Startup: " .. tostring(err));gui:Destroy();return end
     refresh()
-    warn("[Utilities r2] Ready. Independent toggles; STOP ALL restores and closes.")
+    warn("[Utilities r3] Ready. Independent toggles; STOP ALL restores and closes.")
 end
